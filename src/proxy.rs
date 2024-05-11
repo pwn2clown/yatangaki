@@ -1,4 +1,3 @@
-use crate::settings::SettingsMessage;
 use http_body_util::Full;
 use hyper::body::Bytes;
 use hyper::server::conn::http1;
@@ -7,6 +6,7 @@ use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use iced::futures::channel::mpsc;
 use iced::futures::SinkExt;
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -14,28 +14,30 @@ use tokio::sync::oneshot;
 
 pub type ProxyId = usize;
 
+#[derive(Debug, Clone)]
 pub struct ProxyLogRow {
-    proxy_id: ProxyId,
-    url: String,
+    pub proxy_id: ProxyId,
+    pub url: String,
 }
 
 #[derive(Debug, Clone)]
 pub enum ProxyEvent {
+    Initialized((ProxyId, mpsc::Sender<ProxyCommand>)), //  Create ProxyHandle type for this enum
     ProxyError(ProxyId),
-    NewLogRow(ProxyId),
+    NewLogRow(ProxyLogRow),
 }
 
 #[derive(Debug, Clone)]
 pub enum ProxyCommand {
     Stop,
     Start,
-    Intercept,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum ProxyState {
+pub enum ProxyState {
     Running,
     Stopped,
+    Error,
 }
 
 struct Service {
@@ -44,24 +46,21 @@ struct Service {
     //_config: Arc
 }
 
-//  FIXME: proxy should not manipulate SettingsMessage and should only notify with ProxyEvent type.
-pub async fn serve(
-    id: ProxyId,
-    port: u16,
-    mut command: mpsc::Receiver<ProxyCommand>,
-    mut sender: mpsc::Sender<SettingsMessage>,
-) {
+pub async fn serve(id: ProxyId, port: u16, mut sender: mpsc::Sender<ProxyEvent>) -> Infallible {
     let mut state = ProxyState::Stopped;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let mut maybe_shutdown: Option<oneshot::Sender<()>> = None;
 
+    let (command_tx, mut command) = mpsc::channel::<ProxyCommand>(100);
+    sender
+        .send(ProxyEvent::Initialized((id, command_tx)))
+        .await
+        .unwrap();
+
     loop {
         if let Ok(Some(cmd)) = command.try_next() {
-            println!("received command on proxy {id} -> {cmd:#?} on state {state:#?}");
-
             match cmd {
                 ProxyCommand::Stop => {
-                    println!("stopping proxy {id}");
                     if let Some(shutdown) = maybe_shutdown.take() {
                         shutdown.send(()).unwrap();
                         state = ProxyState::Stopped;
@@ -69,27 +68,20 @@ pub async fn serve(
                 }
                 ProxyCommand::Start => {
                     if state == ProxyState::Stopped {
-                        println!("binding port...");
                         match TcpListener::bind(addr).await {
                             Ok(l) => {
                                 let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
                                 let _ = maybe_shutdown.insert(shutdown_tx);
                                 state = ProxyState::Running;
-                                println!("proxy port bound!");
-
-                                let s = Service { id: 0, listener: l };
+                                let s = Service { id, listener: l };
                                 tokio::spawn(service(shutdown_rx, sender.clone(), s));
                             }
                             Err(_err) => {
-                                sender
-                                    .send(SettingsMessage::ProxyEvent(ProxyEvent::ProxyError(id)))
-                                    .await
-                                    .unwrap();
+                                sender.send(ProxyEvent::ProxyError(id)).await.unwrap();
                             }
                         }
                     }
                 }
-                ProxyCommand::Intercept => {}
             }
         }
 
@@ -99,7 +91,7 @@ pub async fn serve(
 
 async fn service(
     shutdown: oneshot::Receiver<()>,
-    sender: mpsc::Sender<SettingsMessage>,
+    sender: mpsc::Sender<ProxyEvent>,
     service: Service,
 ) {
     let sender_cloned = sender.clone();
@@ -111,11 +103,8 @@ async fn service(
 
             loop {
                 let (stream, _socket_addr) = service.listener.accept().await.unwrap();
-                println!("connection accepted");
-
-
                 let io = TokioIo::new(stream);
-                let s = service_fn(|req| proxify_request(req, sender_cloned.clone()));
+                let s = service_fn(|req| proxify_request(req, service.id, sender_cloned.clone()));
 
                 match http1::Builder::new()
                     .serve_connection(io, s)
@@ -131,7 +120,15 @@ async fn service(
 
 async fn proxify_request(
     req: Request<hyper::body::Incoming>,
-    sender: mpsc::Sender<SettingsMessage>,
+    proxy_id: ProxyId,
+    mut sender: mpsc::Sender<ProxyEvent>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    sender
+        .send(ProxyEvent::NewLogRow(ProxyLogRow {
+            proxy_id,
+            url: req.uri().to_string(),
+        }))
+        .await
+        .unwrap();
     Ok(Response::default())
 }

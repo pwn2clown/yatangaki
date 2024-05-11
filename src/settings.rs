@@ -1,32 +1,27 @@
+use crate::proxy::ProxyState;
 use crate::proxy::{self, ProxyCommand, ProxyEvent, ProxyId};
 use crate::Message;
+use iced::advanced::graphics::futures::subscription;
 use iced::futures::channel::mpsc;
 use iced::futures::SinkExt;
 use iced::widget::Scrollable;
 use iced::widget::{Button, Column, Container, Row, Text, TextInput};
-use iced::{command, Command, Element, Length};
+use iced::{Command, Element, Length, Subscription};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-
-pub enum ProxyStatus {
-    Started,
-    Stopped,
-    Error,
-}
 
 pub struct Proxy {
     id: ProxyId,
     port: u16,
-    status: ProxyStatus,
-    command: mpsc::Sender<ProxyCommand>,
+    status: ProxyState,
+    command: Option<mpsc::Sender<ProxyCommand>>,
 }
 
+//  TODO: rename 'SettingsTabs'
 pub struct SettingsTabs {
     is_port_format_error: bool,
     proxy_port_request: String,
     proxies: HashMap<ProxyId, Proxy>,
     selected_proxy: Option<ProxyId>,
-    packet_id: Arc<Mutex<usize>>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,7 +42,6 @@ impl SettingsTabs {
             proxy_port_request: String::default(),
             proxies: HashMap::default(),
             selected_proxy: None,
-            packet_id: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -101,19 +95,19 @@ impl SettingsTabs {
 
             if let Some(proxy) = self.proxies.get(&id) {
                 match proxy.status {
-                    ProxyStatus::Started => {
+                    ProxyState::Running => {
                         let button: Button<'_, SettingsMessage> =
                             Button::new("stop").on_press(SettingsMessage::StopProxy(id));
 
                         config = config.push(button);
                     }
-                    ProxyStatus::Stopped => {
+                    ProxyState::Stopped => {
                         let button: Button<'_, SettingsMessage> =
                             Button::new("start").on_press(SettingsMessage::StartProxy(id));
 
                         config = config.push(button);
                     }
-                    ProxyStatus::Error => {
+                    ProxyState::Error => {
                         let button: Button<'_, SettingsMessage> =
                             Button::new("start").on_press(SettingsMessage::StartProxy(id));
 
@@ -133,73 +127,88 @@ impl SettingsTabs {
         content.map(Message::SettingsMessage)
     }
 
+    pub fn subscription(&self) -> Subscription<Message> {
+        let mut subscriptions = vec![];
+        for (_id, proxy) in &self.proxies {
+            let proxy_id = proxy.id;
+            let port = proxy.port;
+
+            subscriptions.push(subscription::channel(
+                proxy_id,
+                100,
+                move |sender: mpsc::Sender<ProxyEvent>| proxy::serve(proxy_id, port, sender),
+            ));
+        }
+
+        Subscription::batch(subscriptions).map(Message::ProxyEvent)
+    }
+
     pub fn update(&mut self, message: SettingsMessage) -> Command<SettingsMessage> {
         match message {
-            //  Create the proxy task in a pending state, might start automatically later on.
-            SettingsMessage::AddProxy => {
-                let (proxy_command_tx, proxy_command_rx) = mpsc::channel::<ProxyCommand>(100);
-                match self.proxy_port_request.parse::<u16>() {
-                    Ok(port) => {
-                        self.proxy_port_request = String::default();
-                        let id = self.proxies.len();
-                        let proxy = Proxy {
-                            id: self.proxies.len(),
-                            port,
-                            status: ProxyStatus::Stopped,
-                            command: proxy_command_tx, //  Consider not using options here.
-                        };
-                        self.proxies.insert(id, proxy);
-                        self.is_port_format_error = false;
-
-                        return command::channel(
-                            100,
-                            move |sender: mpsc::Sender<SettingsMessage>| async move {
-                                proxy::serve(id, port, proxy_command_rx, sender).await
-                            },
-                        );
-                    }
-                    Err(_err) => {
-                        self.is_port_format_error = true;
-                        return Command::none();
-                    }
+            //  Create the proxy task in a pending state, might start automatically in future
+            //  versions.
+            SettingsMessage::AddProxy => match self.proxy_port_request.parse::<u16>() {
+                Ok(port) => {
+                    self.proxy_port_request = String::default();
+                    let id = self.proxies.len();
+                    let proxy = Proxy {
+                        id: self.proxies.len(),
+                        port,
+                        status: ProxyState::Stopped,
+                        command: None,
+                    };
+                    self.proxies.insert(id, proxy);
+                    self.is_port_format_error = false;
                 }
-            }
+                Err(_err) => {
+                    self.is_port_format_error = true;
+                }
+            },
             SettingsMessage::SelectProxy(proxy_id) => {
                 let _ = self.selected_proxy.insert(proxy_id);
             }
             SettingsMessage::ProxyPortRequest(port) => {
-                if port.parse::<u16>().is_err() && !port.is_empty() {
-                    self.is_port_format_error = true;
-                } else {
-                    self.is_port_format_error = false;
-                }
-
+                self.is_port_format_error = port.parse::<u16>().is_err() && !port.is_empty();
                 self.proxy_port_request = port;
             }
             SettingsMessage::StartProxy(id) => {
                 let proxy = self.proxies.get_mut(&id).unwrap();
-                proxy.status = ProxyStatus::Started;
-                let mut command = proxy.command.clone();
+                proxy.status = ProxyState::Running;
+                let command = proxy.command.clone();
+
                 return Command::perform(
-                    async move { command.send(ProxyCommand::Start).await },
+                    async move {
+                        if let Some(mut cmd) = command {
+                            cmd.send(ProxyCommand::Start).await.unwrap();
+                        }
+                    },
                     |_| SettingsMessage::Update,
                 );
             }
             SettingsMessage::StopProxy(id) => {
                 let proxy = self.proxies.get_mut(&id).unwrap();
-                let mut command = proxy.command.clone();
+                let command = proxy.command.clone();
 
-                proxy.status = ProxyStatus::Stopped;
+                proxy.status = ProxyState::Stopped;
                 return Command::perform(
-                    async move { command.send(ProxyCommand::Stop).await },
+                    async move {
+                        if let Some(mut cmd) = command {
+                            cmd.send(ProxyCommand::Stop).await.unwrap();
+                        }
+                    },
                     |_| SettingsMessage::Update,
                 );
             }
             SettingsMessage::ProxyEvent(event) => match event {
-                ProxyEvent::NewLogRow(id) => println!("recived event from proxy {id}"),
+                ProxyEvent::NewLogRow(_row) => {}
                 ProxyEvent::ProxyError(id) => {
                     let proxy = self.proxies.get_mut(&id).unwrap();
-                    proxy.status = ProxyStatus::Error;
+                    proxy.status = ProxyState::Error;
+                }
+                ProxyEvent::Initialized((id, command_tx)) => {
+                    let proxy = self.proxies.get_mut(&id).unwrap();
+                    proxy.status = ProxyState::Stopped;
+                    let _ = proxy.command.insert(command_tx);
                 }
             },
             SettingsMessage::Update => {}
