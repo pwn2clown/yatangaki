@@ -2,7 +2,7 @@ use crate::proxy::{ProxyEvent, ProxyLogRow};
 use crate::Message;
 use iced::widget::{button, row, Column, Container, Text};
 use iced::{Command, Element, Length};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 type PacketId = usize;
 
@@ -10,7 +10,7 @@ type PacketId = usize;
 pub struct ProxyLogs {
     last_id: usize,
     packets: HashMap<PacketId, ProxyLogRow>,
-    selected_packet: PacketId,
+    selected_packet: HashSet<PacketId>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,7 +41,15 @@ impl ProxyLogs {
                 Text::new(packet.proxy_id.to_string()).width(Length::Fixed(50.0)),
                 Text::new(&packet.url).width(Length::Fill)
             );
-            content = content.push(button(row).on_press(ProxyLogMessage::SelectPacket(*id)));
+
+            let mut row_button = button(row).on_press(ProxyLogMessage::SelectPacket(*id));
+
+            println!("{:#?}", self.selected_packet);
+
+            if self.selected_packet.get(id).is_none() {
+                row_button = row_button.style(iced::theme::Button::Secondary);
+            }
+            content = content.push(row_button);
         }
         let content: Element<'_, ProxyLogMessage> = Container::new(content).padding(20.0).into();
         content.map(Message::ProxyLogMessage)
@@ -55,8 +63,11 @@ impl ProxyLogs {
                 }
                 _ => {}
             },
+            //  TODO: rename message to ToggleLowRow
             ProxyLogMessage::SelectPacket(packet_id) => {
-                self.selected_packet = packet_id;
+                println!("selecting proxy log row {packet_id}");
+                //  Does not handle toggling properly here.
+                self.selected_packet.insert(packet_id);
             }
         }
         Command::none()

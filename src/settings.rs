@@ -1,11 +1,9 @@
-use crate::proxy::ProxyState;
-use crate::proxy::{self, ProxyCommand, ProxyEvent, ProxyId};
+use crate::certificates::CertificateStore;
+use crate::proxy::{self, ProxyCommand, ProxyEvent, ProxyId, ProxyServiceConfig, ProxyState};
 use crate::Message;
 use iced::advanced::graphics::futures::subscription;
-use iced::futures::channel::mpsc;
-use iced::futures::SinkExt;
-use iced::widget::Scrollable;
-use iced::widget::{Button, Column, Container, Row, Text, TextInput};
+use iced::futures::{channel::mpsc, SinkExt};
+use iced::widget::{Button, Column, Container, Row, Scrollable, Text, TextInput};
 use iced::{Command, Element, Length, Subscription};
 use std::collections::HashMap;
 
@@ -14,14 +12,16 @@ pub struct Proxy {
     port: u16,
     status: ProxyState,
     command: Option<mpsc::Sender<ProxyCommand>>,
+    config: ProxyServiceConfig,
 }
 
-//  TODO: rename 'SettingsTabs'
+//  TODO: rename 'SettingsTabs' to ProxySettings
 pub struct SettingsTabs {
     is_port_format_error: bool,
     proxy_port_request: String,
     proxies: HashMap<ProxyId, Proxy>,
     selected_proxy: Option<ProxyId>,
+    certificate_store: CertificateStore,
 }
 
 #[derive(Debug, Clone)]
@@ -36,12 +36,13 @@ pub enum SettingsMessage {
 }
 
 impl SettingsTabs {
-    pub fn new() -> Self {
+    pub fn new(certificate_store: CertificateStore) -> Self {
         Self {
             is_port_format_error: false,
             proxy_port_request: String::default(),
             proxies: HashMap::default(),
             selected_proxy: None,
+            certificate_store,
         }
     }
 
@@ -132,11 +133,14 @@ impl SettingsTabs {
         for (_id, proxy) in &self.proxies {
             let proxy_id = proxy.id;
             let port = proxy.port;
+            let proxy_service_config = ProxyServiceConfig::from(self.certificate_store.clone());
 
             subscriptions.push(subscription::channel(
                 proxy_id,
                 100,
-                move |sender: mpsc::Sender<ProxyEvent>| proxy::serve(proxy_id, port, sender),
+                move |sender: mpsc::Sender<ProxyEvent>| {
+                    proxy::serve(proxy_id, port, sender, proxy_service_config)
+                },
             ));
         }
 
@@ -156,6 +160,7 @@ impl SettingsTabs {
                         port,
                         status: ProxyState::Stopped,
                         command: None,
+                        config: ProxyServiceConfig::from(self.certificate_store.clone()),
                     };
                     self.proxies.insert(id, proxy);
                     self.is_port_format_error = false;

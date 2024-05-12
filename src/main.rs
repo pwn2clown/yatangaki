@@ -1,15 +1,14 @@
-use iced::{executor, Application, Command, Theme};
-use iced::{Length, Settings};
+use crate::certificates::CertificateStore;
+use crate::proxy::ProxyEvent;
+use iced::{executor, Application, Command, Length, Settings, Theme};
 use iced_aw::{TabLabel, Tabs};
 use proxy_logs::{ProxyLogMessage, ProxyLogs};
 use settings::{SettingsMessage, SettingsTabs};
 
-use crate::proxy::ProxyEvent;
-
+mod certificates;
 mod proxy;
 mod proxy_logs;
 mod settings;
-mod style;
 
 struct App {
     selected_tab: TabId,
@@ -32,10 +31,13 @@ impl Application for App {
     type Executor = executor::Default;
 
     fn new(_flags: Self::Flags) -> (Self, Command<Self::Message>) {
+        //  Certificate store should be loaded afterwards in order to display potential errors
+        let certificate_store = CertificateStore::generate().unwrap();
+
         (
             Self {
                 selected_tab: TabId::Settings,
-                settings_tab: SettingsTabs::new(),
+                settings_tab: SettingsTabs::new(certificate_store),
                 proxy_logs: ProxyLogs::default(),
             },
             Command::none(),
@@ -58,7 +60,10 @@ impl Application for App {
                     .map(Message::SettingsMessage)
             }
             Message::ProxyLogMessage(message) => {
-                println!("updating proxy logs state");
+                return self
+                    .proxy_logs
+                    .update(message)
+                    .map(Message::ProxyLogMessage);
             }
             Message::ProxyEvent(event) => {
                 //  TODO: should make fine grained update dispatch to avoid useless clones and

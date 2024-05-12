@@ -1,16 +1,18 @@
 use http_body_util::Full;
-use hyper::body::Bytes;
+use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Request, Response};
+use hyper::{Method, Request, Response};
 use hyper_util::rt::TokioIo;
-use iced::futures::channel::mpsc;
-use iced::futures::SinkExt;
+use iced::futures::{channel::mpsc, SinkExt};
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+
+use crate::certificates::CertificateStore;
 
 pub type ProxyId = usize;
 
@@ -40,13 +42,31 @@ pub enum ProxyState {
     Error,
 }
 
-struct Service {
-    id: ProxyId,
-    listener: TcpListener,
-    //_config: Arc
+#[derive(Clone)]
+pub struct ProxyServiceConfig {
+    certificates: CertificateStore,
 }
 
-pub async fn serve(id: ProxyId, port: u16, mut sender: mpsc::Sender<ProxyEvent>) -> Infallible {
+impl ProxyServiceConfig {
+    pub fn from(store: CertificateStore) -> Self {
+        Self {
+            certificates: store.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Service {
+    id: ProxyId,
+    config: ProxyServiceConfig,
+}
+
+pub async fn serve(
+    id: ProxyId,
+    port: u16,
+    mut sender: mpsc::Sender<ProxyEvent>,
+    config: ProxyServiceConfig,
+) -> Infallible {
     let mut state = ProxyState::Stopped;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let mut maybe_shutdown: Option<oneshot::Sender<()>> = None;
@@ -73,8 +93,11 @@ pub async fn serve(id: ProxyId, port: u16, mut sender: mpsc::Sender<ProxyEvent>)
                                 let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
                                 let _ = maybe_shutdown.insert(shutdown_tx);
                                 state = ProxyState::Running;
-                                let s = Service { id, listener: l };
-                                tokio::spawn(service(shutdown_rx, sender.clone(), s));
+                                let s = Service {
+                                    id,
+                                    config: config.clone(),
+                                };
+                                tokio::spawn(service(shutdown_rx, sender.clone(), s, l));
                             }
                             Err(_err) => {
                                 sender.send(ProxyEvent::ProxyError(id)).await.unwrap();
@@ -93,6 +116,7 @@ async fn service(
     shutdown: oneshot::Receiver<()>,
     sender: mpsc::Sender<ProxyEvent>,
     service: Service,
+    listener: TcpListener,
 ) {
     let sender_cloned = sender.clone();
     tokio::select! {
@@ -102,9 +126,9 @@ async fn service(
         _ = async move {
 
             loop {
-                let (stream, _socket_addr) = service.listener.accept().await.unwrap();
+                let (stream, _socket_addr) = listener.accept().await.unwrap();
                 let io = TokioIo::new(stream);
-                let s = service_fn(|req| proxify_request(req, service.id, sender_cloned.clone()));
+                let s = service_fn(|req| proxify_request(req, service.id, sender_cloned.clone(), service.clone()));
 
                 match http1::Builder::new()
                     .serve_connection(io, s)
@@ -122,7 +146,9 @@ async fn proxify_request(
     req: Request<hyper::body::Incoming>,
     proxy_id: ProxyId,
     mut sender: mpsc::Sender<ProxyEvent>,
+    mut service: Service,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    //  TODO: event to remove
     sender
         .send(ProxyEvent::NewLogRow(ProxyLogRow {
             proxy_id,
@@ -130,5 +156,37 @@ async fn proxify_request(
         }))
         .await
         .unwrap();
+
+    let authority = req.uri().authority().unwrap().to_string();
+
+    if *req.method() == Method::CONNECT {
+        match hyper::upgrade::on(req).await {
+            Ok(to_upgrade) => {
+                let acceptor = service
+                    .config
+                    .certificates
+                    .tls_acceptor(&authority)
+                    .unwrap();
+
+                let stream = acceptor.accept(TokioIo::new(to_upgrade)).await.unwrap();
+                let _ = http1::Builder::new()
+                    .serve_connection(
+                        TokioIo::new(stream),
+                        service_fn(move |req| forward_packet(req)),
+                    )
+                    .await;
+            }
+            Err(_err) => {
+                println!("failed to upgrade protocol");
+            }
+        }
+
+        return Ok(Response::default());
+    }
+
+    Ok(Response::default())
+}
+
+async fn forward_packet(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
     Ok(Response::default())
 }
