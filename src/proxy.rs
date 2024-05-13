@@ -1,18 +1,17 @@
-use http_body_util::Full;
+use crate::certificates::CertificateStore;
+use http::uri::{Authority, Parts, Scheme};
+use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Method, Request, Response};
+use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use iced::futures::{channel::mpsc, SinkExt};
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-
-use crate::certificates::CertificateStore;
 
 pub type ProxyId = usize;
 
@@ -128,7 +127,7 @@ async fn service(
             loop {
                 let (stream, _socket_addr) = listener.accept().await.unwrap();
                 let io = TokioIo::new(stream);
-                let s = service_fn(|req| proxify_request(req, service.id, sender_cloned.clone(), service.clone()));
+                let s = service_fn(|req| proxify_request(req, sender_cloned.clone(), service.clone()));
 
                 match http1::Builder::new()
                     .serve_connection(io, s)
@@ -143,50 +142,109 @@ async fn service(
 }
 
 async fn proxify_request(
-    req: Request<hyper::body::Incoming>,
-    proxy_id: ProxyId,
-    mut sender: mpsc::Sender<ProxyEvent>,
+    mut req: Request<hyper::body::Incoming>,
+    sender: mpsc::Sender<ProxyEvent>,
     mut service: Service,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    //  TODO: event to remove
-    sender
-        .send(ProxyEvent::NewLogRow(ProxyLogRow {
-            proxy_id,
-            url: req.uri().to_string(),
-        }))
-        .await
-        .unwrap();
+    if req.uri().scheme_str() == Some("https") {
+        let mut res = Response::default();
+        *res.status_mut() = StatusCode::BAD_REQUEST;
+        return Ok(res);
+    }
 
-    let authority = req.uri().authority().unwrap().to_string();
+    let authority = req.uri().authority();
+
+    if authority.is_none() {
+        let mut res = Response::default();
+        *res.status_mut() = StatusCode::BAD_REQUEST;
+        return Ok(res);
+    };
+
+    let authority_key = authority.unwrap().to_string();
+    let owned_authority = authority.cloned();
 
     if *req.method() == Method::CONNECT {
-        match hyper::upgrade::on(req).await {
-            Ok(to_upgrade) => {
-                let acceptor = service
-                    .config
-                    .certificates
-                    .tls_acceptor(&authority)
-                    .unwrap();
+        tokio::spawn(async move {
+            match hyper::upgrade::on(&mut req).await {
+                Ok(to_upgrade) => {
+                    let acceptor = service
+                        .config
+                        .certificates
+                        .tls_acceptor(&authority_key)
+                        .unwrap();
 
-                let stream = acceptor.accept(TokioIo::new(to_upgrade)).await.unwrap();
-                let _ = http1::Builder::new()
-                    .serve_connection(
-                        TokioIo::new(stream),
-                        service_fn(move |req| forward_packet(req)),
-                    )
-                    .await;
+                    //  Acceptor will generate an error if the client rejects the certificate
+                    if let Ok(stream) = acceptor.accept(TokioIo::new(to_upgrade)).await {
+                        http1::Builder::new()
+                            .serve_connection(
+                                TokioIo::new(stream),
+                                service_fn(move |req| {
+                                    forward_packet(
+                                        req,
+                                        sender.clone(),
+                                        Scheme::HTTPS,
+                                        owned_authority.clone(),
+                                    )
+                                }),
+                            )
+                            .with_upgrades()
+                            .await
+                            .unwrap();
+                    };
+                }
+                Err(_err) => {
+                    println!("failed to upgrade protocol");
+                }
             }
-            Err(_err) => {
-                println!("failed to upgrade protocol");
-            }
-        }
+        });
 
         return Ok(Response::default());
     }
 
-    Ok(Response::default())
+    forward_packet(req, sender, Scheme::HTTP, owned_authority).await
 }
 
-async fn forward_packet(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    Ok(Response::default())
+async fn forward_packet(
+    req: Request<Incoming>,
+    sender: mpsc::Sender<ProxyEvent>,
+    scheme: Scheme,
+    authority: Option<Authority>,
+) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    //  Building full uri for client
+    let mut uri_parts = Parts::default();
+    uri_parts.path_and_query = req.uri().path_and_query().cloned();
+    uri_parts.scheme = Some(scheme);
+    uri_parts.authority = authority;
+
+    let full_uri = Uri::from_parts(uri_parts).unwrap();
+
+    //  Build reqwest compatible request
+    let (parts, body_stream) = req.into_parts();
+    let full_body = body_stream.collect().await.unwrap().to_bytes();
+    let mut full_req = http::request::Request::from_parts(parts, full_body);
+    *full_req.uri_mut() = full_uri;
+
+    println!("{full_req:#?}");
+
+    //  Note: Host header MUST be removed as reqwest will set it itself. Keeping it will lead to
+    //  protocol errors with HTTP/2.
+    full_req.headers_mut().remove(http::header::HOST);
+    let reqwest_req = reqwest::Request::try_from(full_req).unwrap();
+
+    println!("{reqwest_req:#?}");
+
+    let http_client = reqwest::Client::new();
+    let Ok(response) = http_client.execute(reqwest_req).await else {
+        let mut res = Response::default();
+        *res.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+        return Ok(res);
+    };
+
+    let mut hyper_response = Response::default();
+    *hyper_response.status_mut() = response.status();
+    *hyper_response.headers_mut() = response.headers().clone();
+    *hyper_response.version_mut() = response.version();
+    *hyper_response.extensions_mut() = response.extensions().clone();
+    *hyper_response.body_mut() = Full::new(response.bytes().await.unwrap());
+    Ok(hyper_response)
 }

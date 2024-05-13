@@ -13,6 +13,8 @@ http-body-util = "0.1"
 rcgen = { version = "0.13", features = ["crypto"] }
 rustls = "^0.23"
 tokio-rustls = "^0.26"
+reqwest = { version = "^0.12", features = ["rustls-tls"] }
+http = "^1"
 
 [profile.dev]
 debug = 0
