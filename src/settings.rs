@@ -69,7 +69,11 @@ impl SettingsTabs {
                 )
                 .height(Length::Fixed(16.0));
 
-            let button = Button::new(row).on_press(SettingsMessage::SelectProxy(proxy.id));
+            let mut button = Button::new(row).on_press(SettingsMessage::SelectProxy(proxy.id));
+            if self.selected_proxy != Some(*id) {
+                button = button.style(iced::theme::Button::Secondary);
+            }
+
             proxy_list = proxy_list.push(button);
         }
 
@@ -95,26 +99,21 @@ impl SettingsTabs {
             let mut config = Column::new().push(Text::new(format!("selected proxy with id {id}")));
 
             if let Some(proxy) = self.proxies.get(&id) {
-                match proxy.status {
+                let button: Button<'_, SettingsMessage> = match proxy.status {
                     ProxyState::Running => {
-                        let button: Button<'_, SettingsMessage> =
-                            Button::new("stop").on_press(SettingsMessage::StopProxy(id));
-
-                        config = config.push(button);
+                        Button::new("stop").on_press(SettingsMessage::StopProxy(id))
                     }
                     ProxyState::Stopped => {
-                        let button: Button<'_, SettingsMessage> =
-                            Button::new("start").on_press(SettingsMessage::StartProxy(id));
-
-                        config = config.push(button);
+                        Button::new("start").on_press(SettingsMessage::StartProxy(id))
                     }
                     ProxyState::Error => {
-                        let button: Button<'_, SettingsMessage> =
-                            Button::new("start").on_press(SettingsMessage::StartProxy(id));
-
-                        config = config.push(button);
-                        config = config.push(Text::new("an error occured :c"));
+                        Button::new("start").on_press(SettingsMessage::StartProxy(id))
                     }
+                };
+
+                config = config.push(button);
+                if proxy.status == ProxyState::Error {
+                    config = config.push(Text::new("anc error occured"));
                 }
             }
 
@@ -149,8 +148,8 @@ impl SettingsTabs {
 
     pub fn update(&mut self, message: SettingsMessage) -> Command<SettingsMessage> {
         match message {
-            //  Create the proxy task in a pending state, might start automatically in future
-            //  versions.
+            //  Create the proxy task in a pending state, should start automatically is specifed in
+            //  config file.
             SettingsMessage::AddProxy => match self.proxy_port_request.parse::<u16>() {
                 Ok(port) => {
                     self.proxy_port_request = String::default();
@@ -205,7 +204,6 @@ impl SettingsTabs {
                 );
             }
             SettingsMessage::ProxyEvent(event) => match event {
-                ProxyEvent::NewLogRow(_row) => {}
                 ProxyEvent::ProxyError(id) => {
                     let proxy = self.proxies.get_mut(&id).unwrap();
                     proxy.status = ProxyState::Error;
@@ -215,6 +213,7 @@ impl SettingsTabs {
                     proxy.status = ProxyState::Stopped;
                     let _ = proxy.command.insert(command_tx);
                 }
+                _ => {}
             },
             SettingsMessage::Update => {}
         }

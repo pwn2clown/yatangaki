@@ -18,14 +18,15 @@ pub type ProxyId = usize;
 #[derive(Debug, Clone)]
 pub struct ProxyLogRow {
     pub proxy_id: ProxyId,
-    pub url: String,
+    pub request: hyper::Request<hyper::body::Bytes>,
+    //  pub response
 }
 
 #[derive(Debug, Clone)]
 pub enum ProxyEvent {
     Initialized((ProxyId, mpsc::Sender<ProxyCommand>)), //  Create ProxyHandle type for this enum
     ProxyError(ProxyId),
-    NewLogRow(ProxyLogRow),
+    PushLogRow(ProxyLogRow),
 }
 
 #[derive(Debug, Clone)]
@@ -206,7 +207,7 @@ async fn proxify_request(
 
 async fn forward_packet(
     req: Request<Incoming>,
-    sender: mpsc::Sender<ProxyEvent>,
+    mut sender: mpsc::Sender<ProxyEvent>,
     scheme: Scheme,
     authority: Option<Authority>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
@@ -225,6 +226,16 @@ async fn forward_packet(
     *full_req.uri_mut() = full_uri;
 
     println!("{full_req:#?}");
+    sender
+        .send(ProxyEvent::PushLogRow(
+            ProxyLogRow {
+                proxy_id: 0,
+                request: full_req.clone(),
+            }
+            .clone(),
+        ))
+        .await
+        .unwrap();
 
     //  Note: Host header MUST be removed as reqwest will set it itself. Keeping it will lead to
     //  protocol errors with HTTP/2.

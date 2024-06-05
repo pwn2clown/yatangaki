@@ -74,10 +74,4 @@ impl CertificateStore {
 
         Ok(inner.entity_certificates.get(authority).cloned().unwrap())
     }
-
-    pub fn save(&self) -> Result<(), std::io::Error> {
-        Ok(())
-    }
-
-    //  pub fn get_location()
 }

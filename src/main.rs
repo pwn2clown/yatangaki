@@ -1,16 +1,19 @@
 use crate::certificates::CertificateStore;
 use crate::proxy::ProxyEvent;
+use config::ProjectConfig;
 use iced::{executor, Application, Command, Length, Settings, Theme};
 use iced_aw::{TabLabel, Tabs};
 use proxy_logs::{ProxyLogMessage, ProxyLogs};
 use settings::{SettingsMessage, SettingsTabs};
 
 mod certificates;
+mod config;
 mod proxy;
 mod proxy_logs;
 mod settings;
 
 struct App {
+    config: ProjectConfig,
     selected_tab: TabId,
     settings_tab: settings::SettingsTabs,
     proxy_logs: proxy_logs::ProxyLogs,
@@ -36,6 +39,7 @@ impl Application for App {
 
         (
             Self {
+                config: ProjectConfig::load().unwrap(),
                 selected_tab: TabId::Settings,
                 settings_tab: SettingsTabs::new(certificate_store),
                 proxy_logs: ProxyLogs::default(),
