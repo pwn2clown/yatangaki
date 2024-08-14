@@ -225,7 +225,6 @@ async fn forward_packet(
     let mut full_req = http::request::Request::from_parts(parts, full_body);
     *full_req.uri_mut() = full_uri;
 
-    println!("{full_req:#?}");
     sender
         .send(ProxyEvent::PushLogRow(
             ProxyLogRow {
@@ -241,8 +240,6 @@ async fn forward_packet(
     //  protocol errors with HTTP/2.
     full_req.headers_mut().remove(http::header::HOST);
     let reqwest_req = reqwest::Request::try_from(full_req).unwrap();
-
-    println!("{reqwest_req:#?}");
 
     let http_client = reqwest::Client::new();
     let Ok(response) = http_client.execute(reqwest_req).await else {

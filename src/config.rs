@@ -5,21 +5,21 @@ use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 
-const CONFIG_DIR: &'static str = ".yatangaki";
-const CONFIG_FILE: &'static str = "config.toml";
-const CA_PATH: &'static str = "certificate_authority.der";
+const CONFIG_DIR: &str = ".yatangaki";
+const CONFIG_FILE: &str = "config.toml";
+//const CA_PATH: &str = "certificate_authority.der";
 
 #[derive(Deserialize, Serialize)]
 pub struct ProxyConfig {
-    port: u16,
-    id: ProxyId,
-    //auto_start: bool
+    pub port: u16,
+    pub id: ProxyId,
+    pub auto_start: bool,
 }
 
 #[derive(Deserialize, Serialize, Default)]
 pub struct ProjectConfig {
-    proxies: Vec<ProxyConfig>,
-    //  projects
+    pub proxies: Vec<ProxyConfig>,
+    //  project_templates: Vec<?>,
 }
 
 impl ProjectConfig {
@@ -45,12 +45,11 @@ impl ProjectConfig {
     }
 
     pub fn save(&self) -> Result<(), Box<dyn Error>> {
-        let raw_config = toml::to_string(self).unwrap();
-
         let config_path = [&env::var("HOME").unwrap(), CONFIG_DIR, CONFIG_FILE]
             .iter()
             .collect::<PathBuf>();
 
+        let raw_config = toml::to_string(self).unwrap();
         fs::write(config_path, &raw_config)?;
         Ok(())
     }

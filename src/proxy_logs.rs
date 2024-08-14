@@ -1,63 +1,71 @@
 use crate::proxy::{ProxyEvent, ProxyLogRow};
 use crate::Message;
-use iced::widget::text_editor::Content;
-use iced::widget::{button, row, Column, Container, Text, TextEditor};
+use iced::widget::pane_grid::Pane;
+use iced::widget::{button, container, pane_grid, row, text, Column, Container, PaneGrid, Text};
 use iced::{Command, Element, Length};
-use iced_aw::{split::Axis, Split};
 use std::collections::HashMap;
 
 type PacketId = usize;
 
-#[derive(Default)]
 pub struct ProxyLogs {
     last_id: usize,
     packets: HashMap<PacketId, ProxyLogRow>,
     focused_row: Option<PacketId>,
-    horizontal_divider_position: Option<u16>,
-    editor_divider_position: Option<u16>,
+    panes: pane_grid::State<Panes>,
+    main_pane: Pane,
+    request_viewer_displayed: bool,
 }
 
 #[derive(Debug, Clone)]
 pub enum ProxyLogMessage {
     ProxyEvent(ProxyEvent),
     SelectPacket(PacketId),
-    SplitResize(u16),
-    EditorSplitResize(u16),
+}
+
+enum Panes {
+    RequestViewer,
+    ResponseViewer,
+    Logs,
 }
 
 impl ProxyLogs {
+    pub fn new() -> Self {
+        let (panes, pane) = pane_grid::State::new(Panes::Logs);
+
+        Self {
+            last_id: 0,
+            packets: HashMap::default(),
+            focused_row: None,
+            panes,
+            main_pane: pane,
+            request_viewer_displayed: false,
+        }
+    }
+
     fn insert_packet(&mut self, row: ProxyLogRow) {
         let _ = self.packets.insert(self.last_id, row);
         self.last_id += 1;
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        if self.focused_row.is_some() {
-            Split::new(
-                self.proxy_table_view(),
-                Text::new("Request editor"),
-                self.horizontal_divider_position,
-                Axis::Horizontal,
-                |position| Message::ProxyLogMessage(ProxyLogMessage::SplitResize(position)),
-            )
-            .into()
-        } else {
-            self.proxy_table_view()
-        }
-    }
+        let pane_grid = PaneGrid::new(&self.panes, |_id, pane, _is_maximized| {
+            pane_grid::Content::new(match pane {
+                Panes::Logs => self.proxy_table_view(),
+                Panes::RequestViewer => match self.focused_row {
+                    Some(row_id) => {
+                        let request = self.packets.get(&row_id).unwrap().request.clone();
+                        //let body = String::from_utf8_lossy(request.body());
+                        let method = request.method().as_str();
+                        text(method).into()
+                    }
+                    None => text("no row selected").into(),
+                },
+                Panes::ResponseViewer => text("response content").into(),
+            })
+        });
 
-    /*
-    fn request_editor_view(&self) -> Element<'_, Message> {
-        Split::new(
-            TextEditor::new(&Content::with_text("issou la chancla")),
-            TextEditor::new(&Content::with_text("risitas")),
-            self.editor_divider_position,
-            Axis::Vertical,
-            |position| Message::ProxyLogMessage(ProxyLogMessage::EditorSplitResize(position)),
-        )
-        .into()
+        container(pane_grid).padding(10).into()
     }
-    */
 
     fn proxy_table_view(&self) -> Element<'_, Message> {
         let mut content = Column::new();
@@ -104,14 +112,24 @@ impl ProxyLogs {
             },
             //  TODO: rename message to ToggleLowRow
             ProxyLogMessage::SelectPacket(packet_id) => {
-                println!("selecting proxy log row {packet_id}");
+                if !self.request_viewer_displayed {
+                    let (pane, _) = self
+                        .panes
+                        .split(
+                            pane_grid::Axis::Horizontal,
+                            self.main_pane,
+                            Panes::RequestViewer,
+                        )
+                        .unwrap();
+
+                    let _ =
+                        self.panes
+                            .split(pane_grid::Axis::Vertical, pane, Panes::ResponseViewer);
+
+                    self.request_viewer_displayed = true;
+                }
+
                 let _ = self.focused_row.insert(packet_id);
-            }
-            ProxyLogMessage::SplitResize(position) => {
-                self.horizontal_divider_position = Some(position);
-            }
-            ProxyLogMessage::EditorSplitResize(position) => {
-                self.editor_divider_position = Some(position);
             }
         }
         Command::none()
