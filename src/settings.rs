@@ -1,5 +1,6 @@
 use crate::certificates::CertificateStore;
 use crate::config::{ProjectConfig, ProxyConfig};
+use crate::db::Db;
 use crate::proxy::{self, ProxyCommand, ProxyEvent, ProxyId, ProxyServiceConfig, ProxyState};
 use crate::Message;
 use iced::advanced::graphics::futures::subscription;
@@ -45,6 +46,11 @@ enum SettingsState {
 
 impl SettingsTabs {
     pub fn new(certificate_store: CertificateStore) -> Self {
+        //  TODO: eventually init from exisiting project
+        if let Err(e) = Db::create_project_db("test") {
+            println!("failed to create database {e:#?}");
+        }
+
         let (project_config, settings_state) = match ProjectConfig::load() {
             Ok(p) => (p, SettingsState::Loaded),
             Err(e) => (ProjectConfig::default(), SettingsState::Error(e)),

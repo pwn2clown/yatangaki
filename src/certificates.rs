@@ -39,7 +39,7 @@ impl CertificateStore {
     pub fn tls_acceptor(&mut self, authority: &str) -> Result<TlsAcceptor, rcgen::Error> {
         let mut inner = self.inner.lock().unwrap();
 
-        if inner.entity_certificates.contains_key(authority) {
+        if !inner.entity_certificates.contains_key(authority) {
             let san = SanType::DnsName(Ia5String::try_from(authority).unwrap());
             let mut params = CertificateParams::default();
             params.is_ca = rcgen::IsCa::NoCa;

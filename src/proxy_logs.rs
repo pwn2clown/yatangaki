@@ -108,6 +108,7 @@ impl ProxyLogs {
                 ProxyEvent::PushLogRow(row) => {
                     self.insert_packet(row);
                 }
+                ProxyEvent::PushHttpResponse(response) => {}
                 _ => {}
             },
             //  TODO: rename message to ToggleLowRow

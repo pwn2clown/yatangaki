@@ -1,4 +1,5 @@
 use crate::certificates::CertificateStore;
+use crate::db::Db;
 use http::uri::{Authority, Parts, Scheme};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
@@ -19,7 +20,7 @@ pub type ProxyId = usize;
 pub struct ProxyLogRow {
     pub proxy_id: ProxyId,
     pub request: hyper::Request<hyper::body::Bytes>,
-    //  pub response
+    pub response: Option<hyper::Response<Full<Bytes>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -27,6 +28,7 @@ pub enum ProxyEvent {
     Initialized((ProxyId, mpsc::Sender<ProxyCommand>)), //  Create ProxyHandle type for this enum
     ProxyError(ProxyId),
     PushLogRow(ProxyLogRow),
+    PushHttpResponse(hyper::Response<Full<Bytes>>),
 }
 
 #[derive(Debug, Clone)]
@@ -57,12 +59,12 @@ impl ProxyServiceConfig {
 
 #[derive(Clone)]
 struct Service {
-    id: ProxyId,
+    proxy_id: ProxyId,
     config: ProxyServiceConfig,
 }
 
 pub async fn serve(
-    id: ProxyId,
+    proxy_id: ProxyId,
     port: u16,
     mut sender: mpsc::Sender<ProxyEvent>,
     config: ProxyServiceConfig,
@@ -73,7 +75,7 @@ pub async fn serve(
 
     let (command_tx, mut command) = mpsc::channel::<ProxyCommand>(100);
     sender
-        .send(ProxyEvent::Initialized((id, command_tx)))
+        .send(ProxyEvent::Initialized((proxy_id, command_tx)))
         .await
         .unwrap();
 
@@ -94,13 +96,13 @@ pub async fn serve(
                                 let _ = maybe_shutdown.insert(shutdown_tx);
                                 state = ProxyState::Running;
                                 let s = Service {
-                                    id,
+                                    proxy_id,
                                     config: config.clone(),
                                 };
                                 tokio::spawn(service(shutdown_rx, sender.clone(), s, l));
                             }
                             Err(_err) => {
-                                sender.send(ProxyEvent::ProxyError(id)).await.unwrap();
+                                sender.send(ProxyEvent::ProxyError(proxy_id)).await.unwrap();
                             }
                         }
                     }
@@ -185,6 +187,7 @@ async fn proxify_request(
                                         sender.clone(),
                                         Scheme::HTTPS,
                                         owned_authority.clone(),
+                                        service.proxy_id,
                                     )
                                 }),
                             )
@@ -202,7 +205,7 @@ async fn proxify_request(
         return Ok(Response::default());
     }
 
-    forward_packet(req, sender, Scheme::HTTP, owned_authority).await
+    forward_packet(req, sender, Scheme::HTTP, owned_authority, service.proxy_id).await
 }
 
 async fn forward_packet(
@@ -210,6 +213,7 @@ async fn forward_packet(
     mut sender: mpsc::Sender<ProxyEvent>,
     scheme: Scheme,
     authority: Option<Authority>,
+    proxy_id: usize,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     //  Building full uri for client
     let mut uri_parts = Parts::default();
@@ -225,11 +229,16 @@ async fn forward_packet(
     let mut full_req = http::request::Request::from_parts(parts, full_body);
     *full_req.uri_mut() = full_uri;
 
+    if let Err(e) = Db::insert_request(&full_req, proxy_id) {
+        println!("sqlite error {e:#?}");
+    }
+
     sender
         .send(ProxyEvent::PushLogRow(
             ProxyLogRow {
                 proxy_id: 0,
                 request: full_req.clone(),
+                response: None,
             }
             .clone(),
         ))
@@ -254,5 +263,11 @@ async fn forward_packet(
     *hyper_response.version_mut() = response.version();
     *hyper_response.extensions_mut() = response.extensions().clone();
     *hyper_response.body_mut() = Full::new(response.bytes().await.unwrap());
+
+    sender
+        .send(ProxyEvent::PushHttpResponse(hyper_response.clone()))
+        .await
+        .unwrap();
+
     Ok(hyper_response)
 }
