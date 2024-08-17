@@ -46,7 +46,6 @@ enum SettingsState {
 
 impl SettingsTabs {
     pub fn new(certificate_store: CertificateStore) -> Self {
-        //  TODO: eventually init from exisiting project
         if let Err(e) = Db::create_project_db("test") {
             println!("failed to create database {e:#?}");
         }

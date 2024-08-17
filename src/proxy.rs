@@ -1,7 +1,7 @@
 use crate::certificates::CertificateStore;
 use crate::db::Db;
 use http::uri::{Authority, Parts, Scheme};
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Collected, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -15,6 +15,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 pub type ProxyId = usize;
+pub type PacketId = usize;
 
 #[derive(Debug, Clone)]
 pub struct ProxyLogRow {
@@ -27,8 +28,8 @@ pub struct ProxyLogRow {
 pub enum ProxyEvent {
     Initialized((ProxyId, mpsc::Sender<ProxyCommand>)), //  Create ProxyHandle type for this enum
     ProxyError(ProxyId),
-    PushLogRow(ProxyLogRow),
-    PushHttpResponse(hyper::Response<Full<Bytes>>),
+    NewRequestLogRow,
+    NewResponseLogRow,
 }
 
 #[derive(Debug, Clone)]
@@ -148,7 +149,7 @@ async fn proxify_request(
     mut req: Request<hyper::body::Incoming>,
     sender: mpsc::Sender<ProxyEvent>,
     mut service: Service,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+) -> Result<Response<Collected<Bytes>>, hyper::Error> {
     if req.uri().scheme_str() == Some("https") {
         let mut res = Response::default();
         *res.status_mut() = StatusCode::BAD_REQUEST;
@@ -214,7 +215,7 @@ async fn forward_packet(
     scheme: Scheme,
     authority: Option<Authority>,
     proxy_id: usize,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+) -> Result<Response<Collected<Bytes>>, hyper::Error> {
     //  Building full uri for client
     let mut uri_parts = Parts::default();
     uri_parts.path_and_query = req.uri().path_and_query().cloned();
@@ -229,21 +230,9 @@ async fn forward_packet(
     let mut full_req = http::request::Request::from_parts(parts, full_body);
     *full_req.uri_mut() = full_uri;
 
-    if let Err(e) = Db::insert_request(&full_req, proxy_id) {
-        println!("sqlite error {e:#?}");
-    }
+    let maybe_packet_id = Db::insert_request(&full_req, proxy_id);
 
-    sender
-        .send(ProxyEvent::PushLogRow(
-            ProxyLogRow {
-                proxy_id: 0,
-                request: full_req.clone(),
-                response: None,
-            }
-            .clone(),
-        ))
-        .await
-        .unwrap();
+    sender.send(ProxyEvent::NewRequestLogRow).await.unwrap();
 
     //  Note: Host header MUST be removed as reqwest will set it itself. Keeping it will lead to
     //  protocol errors with HTTP/2.
@@ -262,12 +251,21 @@ async fn forward_packet(
     *hyper_response.headers_mut() = response.headers().clone();
     *hyper_response.version_mut() = response.version();
     *hyper_response.extensions_mut() = response.extensions().clone();
-    *hyper_response.body_mut() = Full::new(response.bytes().await.unwrap());
-
-    sender
-        .send(ProxyEvent::PushHttpResponse(hyper_response.clone()))
+    *hyper_response.body_mut() = Full::new(response.bytes().await.unwrap())
+        .collect()
         .await
         .unwrap();
+
+    match maybe_packet_id {
+        Ok(packet_id) => {
+            let _ = Db::insert_response(&hyper_response, packet_id); //  TODO: handle error
+        }
+        Err(e) => {
+            println!("failed to save request: {e:#?}");
+        }
+    }
+
+    sender.send(ProxyEvent::NewResponseLogRow).await.unwrap();
 
     Ok(hyper_response)
 }
