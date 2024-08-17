@@ -6,7 +6,6 @@ use proxy_logs::{ProxyLogMessage, ProxyLogs};
 use settings::{SettingsMessage, SettingsTabs};
 
 mod certificates;
-mod config;
 mod db;
 mod proxy;
 mod proxy_logs;

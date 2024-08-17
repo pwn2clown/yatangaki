@@ -1,4 +1,4 @@
-use crate::db::Db;
+use crate::db::logs;
 use crate::proxy::{ProxyEvent, ProxyLogRow};
 use crate::Message;
 use iced::widget::pane_grid::Pane;
@@ -67,7 +67,7 @@ impl ProxyLogs {
         );
 
         let mut rows = Column::new();
-        for summary in Db::get_packets_summary().unwrap() {
+        for summary in logs::get_packets_summary().unwrap() {
             let row = row!(
                 Text::new(summary.packet_id.to_string()).width(Length::Fixed(75.0)),
                 Text::new(summary.proxy_id.to_string()).width(Length::Fixed(75.0)),

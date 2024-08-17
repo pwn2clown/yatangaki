@@ -1,5 +1,5 @@
 use crate::certificates::CertificateStore;
-use crate::db::Db;
+use crate::db::logs;
 use http::uri::{Authority, Parts, Scheme};
 use http_body_util::{BodyExt, Collected, Full};
 use hyper::body::{Bytes, Incoming};
@@ -230,7 +230,7 @@ async fn forward_packet(
     let mut full_req = http::request::Request::from_parts(parts, full_body);
     *full_req.uri_mut() = full_uri;
 
-    let maybe_packet_id = Db::insert_request(&full_req, proxy_id);
+    let maybe_packet_id = logs::insert_request(&full_req, proxy_id);
 
     sender.send(ProxyEvent::NewRequestLogRow).await.unwrap();
 
@@ -258,7 +258,7 @@ async fn forward_packet(
 
     match maybe_packet_id {
         Ok(packet_id) => {
-            let _ = Db::insert_response(&hyper_response, packet_id); //  TODO: handle error
+            let _ = logs::insert_response(&hyper_response, packet_id); //  TODO: handle error
         }
         Err(e) => {
             println!("failed to save request: {e:#?}");

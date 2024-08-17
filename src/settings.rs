@@ -1,6 +1,8 @@
 use crate::certificates::CertificateStore;
-use crate::config::{ProjectConfig, ProxyConfig};
-use crate::db::Db;
+use crate::db::{
+    config::{self, ProxyConfig},
+    logs,
+};
 use crate::proxy::{self, ProxyCommand, ProxyEvent, ProxyId, ProxyServiceConfig, ProxyState};
 use crate::Message;
 use iced::advanced::graphics::futures::subscription;
@@ -19,7 +21,6 @@ pub struct Proxy {
 }
 
 pub struct SettingsTabs {
-    settings_state: SettingsState,
     is_port_format_error: bool,
     proxy_port_request: String,
     proxies: HashMap<ProxyId, Proxy>,
@@ -35,28 +36,16 @@ pub enum SettingsMessage {
     StartProxy(ProxyId),
     StopProxy(ProxyId),
     ProxyEvent(ProxyEvent),
-    SaveSettings,
     Update,
-}
-
-enum SettingsState {
-    Loaded, //  Configured proxy are active
-    Error(Box<dyn std::error::Error>),
 }
 
 impl SettingsTabs {
     pub fn new(certificate_store: CertificateStore) -> Self {
-        if let Err(e) = Db::create_project_db("test") {
+        if let Err(e) = logs::create_project_db("test") {
             println!("failed to create database {e:#?}");
         }
 
-        let (project_config, settings_state) = match ProjectConfig::load() {
-            Ok(p) => (p, SettingsState::Loaded),
-            Err(e) => (ProjectConfig::default(), SettingsState::Error(e)),
-        };
-
         let mut settings = Self {
-            settings_state,
             is_port_format_error: false,
             proxy_port_request: String::default(),
             proxies: HashMap::default(),
@@ -64,7 +53,8 @@ impl SettingsTabs {
             certificate_store,
         };
 
-        for proxy_config in &project_config.proxies {
+        config::init_config().unwrap();
+        for proxy_config in &config::load_proxies().unwrap() {
             settings.add_proxy(proxy_config);
         }
 
@@ -177,14 +167,9 @@ impl SettingsTabs {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        let save_button = Button::new("Save").on_press(SettingsMessage::SaveSettings);
-        let mut content = iced::widget::column![save_button, self.proxy_settings_view()];
-
-        if let SettingsState::Error(e) = &self.settings_state {
-            content = content.push(Text::new(format!("{e}")));
-        };
-
-        let content: Element<'_, SettingsMessage> = Container::new(content).padding(20.0).into();
+        let content: Element<'_, SettingsMessage> = Container::new(self.proxy_settings_view())
+            .padding(20.0)
+            .into();
         content.map(Message::SettingsMessage)
     }
 
@@ -211,14 +196,19 @@ impl SettingsTabs {
         match message {
             SettingsMessage::AddProxy => match self.proxy_port_request.parse::<u16>() {
                 Ok(port) => {
-                    self.add_proxy(&ProxyConfig {
+                    let proxy = ProxyConfig {
                         port,
                         id: self.proxies.len(),
                         auto_start: false,
-                    });
+                    };
+
+                    self.add_proxy(&proxy);
 
                     self.proxy_port_request = String::default();
                     self.is_port_format_error = false;
+
+                    let _ = config::save_proxy(&proxy)
+                        .inspect_err(|e| println!("failed to save proxy: {e}"));
                 }
                 Err(_err) => {
                     self.is_port_format_error = true;
@@ -231,7 +221,7 @@ impl SettingsTabs {
                 self.is_port_format_error = port.parse::<u16>().is_err() && !port.is_empty();
                 self.proxy_port_request = port;
             }
-            SettingsMessage::StartProxy(id) => {}
+            SettingsMessage::StartProxy(_id) => {}
             SettingsMessage::StopProxy(id) => {
                 let proxy = self.proxies.get_mut(&id).unwrap();
                 let command = proxy.command.clone();
@@ -263,21 +253,6 @@ impl SettingsTabs {
                 _ => {}
             },
             SettingsMessage::Update => {}
-            SettingsMessage::SaveSettings => {
-                ProjectConfig {
-                    proxies: self
-                        .proxies
-                        .values()
-                        .map(|proxy| ProxyConfig {
-                            id: proxy.id,
-                            port: proxy.port,
-                            auto_start: true,
-                        })
-                        .collect(),
-                }
-                .save()
-                .unwrap(); //  Handle Error
-            }
         }
 
         Command::none()
