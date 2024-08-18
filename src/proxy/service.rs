@@ -1,7 +1,8 @@
-use crate::certificates::CertificateStore;
+use super::{ProxyCommand, ProxyEvent, ProxyId, ProxyState};
 use crate::db::logs;
+use crate::proxy::certificates::CertificateStore;
 use http::uri::{Authority, Parts, Scheme};
-use http_body_util::{BodyExt, Collected, Full};
+use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -13,37 +14,6 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-
-pub type ProxyId = usize;
-pub type PacketId = usize;
-
-#[derive(Debug, Clone)]
-pub struct ProxyLogRow {
-    pub proxy_id: ProxyId,
-    pub request: hyper::Request<hyper::body::Bytes>,
-    pub response: Option<hyper::Response<Full<Bytes>>>,
-}
-
-#[derive(Debug, Clone)]
-pub enum ProxyEvent {
-    Initialized((ProxyId, mpsc::Sender<ProxyCommand>)), //  Create ProxyHandle type for this enum
-    ProxyError(ProxyId),
-    NewRequestLogRow,
-    NewResponseLogRow,
-}
-
-#[derive(Debug, Clone)]
-pub enum ProxyCommand {
-    Stop,
-    Start,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum ProxyState {
-    Running,
-    Stopped,
-    Error,
-}
 
 #[derive(Clone)]
 pub struct ProxyServiceConfig {
@@ -149,7 +119,7 @@ async fn proxify_request(
     mut req: Request<hyper::body::Incoming>,
     sender: mpsc::Sender<ProxyEvent>,
     mut service: Service,
-) -> Result<Response<Collected<Bytes>>, hyper::Error> {
+) -> Result<Response<Full<Bytes>>, hyper::Error> {
     if req.uri().scheme_str() == Some("https") {
         let mut res = Response::default();
         *res.status_mut() = StatusCode::BAD_REQUEST;
@@ -215,7 +185,7 @@ async fn forward_packet(
     scheme: Scheme,
     authority: Option<Authority>,
     proxy_id: usize,
-) -> Result<Response<Collected<Bytes>>, hyper::Error> {
+) -> Result<Response<Full<Bytes>>, hyper::Error> {
     //  Building full uri for client
     let mut uri_parts = Parts::default();
     uri_parts.path_and_query = req.uri().path_and_query().cloned();
@@ -247,18 +217,19 @@ async fn forward_packet(
     };
 
     let mut hyper_response = Response::default();
+
     *hyper_response.status_mut() = response.status();
     *hyper_response.headers_mut() = response.headers().clone();
     *hyper_response.version_mut() = response.version();
     *hyper_response.extensions_mut() = response.extensions().clone();
-    *hyper_response.body_mut() = Full::new(response.bytes().await.unwrap())
-        .collect()
-        .await
-        .unwrap();
+
+    let body_bytes = response.bytes().await.unwrap();
+    *hyper_response.body_mut() = Full::new(body_bytes.clone());
 
     match maybe_packet_id {
         Ok(packet_id) => {
-            let _ = logs::insert_response(&hyper_response, packet_id); //  TODO: handle error
+            let _ = logs::insert_response(&hyper_response, body_bytes, packet_id);
+            //  TODO: handle error
         }
         Err(e) => {
             println!("failed to save request: {e:#?}");

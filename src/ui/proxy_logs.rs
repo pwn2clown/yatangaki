@@ -1,5 +1,5 @@
 use crate::db::logs;
-use crate::proxy::{ProxyEvent, ProxyLogRow};
+use crate::proxy::ProxyEvent;
 use crate::Message;
 use iced::widget::pane_grid::Pane;
 use iced::widget::{
@@ -10,7 +10,6 @@ use iced::{Command, Element, Length};
 type PacketId = usize;
 
 pub struct ProxyLogs {
-    last_id: usize,
     focused_row: Option<PacketId>,
     panes: pane_grid::State<Panes>,
     main_pane: Pane,
@@ -34,7 +33,6 @@ impl ProxyLogs {
         let (panes, pane) = pane_grid::State::new(Panes::Logs);
 
         Self {
-            last_id: 0,
             focused_row: None,
             panes,
             main_pane: pane,
@@ -47,15 +45,38 @@ impl ProxyLogs {
             pane_grid::Content::new(match pane {
                 Panes::Logs => self.proxy_table_view(),
                 Panes::RequestViewer => match self.focused_row {
-                    Some(row_id) => text("request"),
-                    None => text("no row selected"),
-                }
-                .into(),
+                    Some(packet_id) => self.request_viewer_view(packet_id),
+                    None => text("no row selected").into(),
+                },
                 Panes::ResponseViewer => text("response content").into(),
             })
         });
 
         container(pane_grid).padding(10).into()
+    }
+
+    fn request_viewer_view(&self, packet_id: PacketId) -> Element<'_, Message> {
+        let content = match logs::get_full_row(packet_id) {
+            Ok(Some(log_row)) => {
+                let mut raw_request = format!(
+                    "{} {} HTTP/1.1\n",
+                    log_row.request_summary.method, log_row.request_summary.path
+                );
+
+                for (key, value) in log_row.request_headers {
+                    raw_request.push_str(&format!("{key}: {value}\n"));
+                }
+
+                raw_request.push('\n');
+                raw_request.push_str(&String::from_utf8_lossy(&log_row.request_body));
+
+                text(raw_request)
+            }
+            Err(e) => text(format!("failed to get request: {e:#?}")),
+            _ => text("request not found"),
+        };
+
+        container(content).padding(10).into()
     }
 
     fn proxy_table_view(&self) -> Element<'_, Message> {

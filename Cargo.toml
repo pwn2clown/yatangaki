@@ -6,7 +6,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-iced = { version = "0.12.1", default-features = false, features = ["advanced", "tokio"] }
+iced = { version = "0.12.1", features = ["advanced", "tokio"] }
 iced_aw = "0.9"
 tokio = { version = "1", features = ["time", "sync", "net", "macros", "rt"] }
 hyper = { version = "1", default-features = false, features = ["http1", "server"] }

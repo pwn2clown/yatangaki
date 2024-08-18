@@ -1,9 +1,11 @@
-use crate::certificates::CertificateStore;
 use crate::db::{
     config::{self, ProxyConfig},
     logs,
 };
-use crate::proxy::{self, ProxyCommand, ProxyEvent, ProxyId, ProxyServiceConfig, ProxyState};
+use crate::proxy::certificates::CertificateStore;
+use crate::proxy::{
+    self, service::ProxyServiceConfig, ProxyCommand, ProxyEvent, ProxyId, ProxyState,
+};
 use crate::Message;
 use iced::advanced::graphics::futures::subscription;
 use iced::futures::{channel::mpsc, SinkExt};
@@ -184,7 +186,7 @@ impl SettingsTabs {
                 proxy_id,
                 100,
                 move |sender: mpsc::Sender<ProxyEvent>| {
-                    proxy::serve(proxy_id, port, sender, proxy_service_config)
+                    proxy::service::serve(proxy_id, port, sender, proxy_service_config)
                 },
             ));
         }

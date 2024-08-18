@@ -5,7 +5,6 @@ use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 
-const CONFIG_DIR: &str = ".yatangaki";
 const CONFIG_FILE: &str = "config.db";
 
 pub struct ProxyConfig {
@@ -15,8 +14,9 @@ pub struct ProxyConfig {
 }
 
 fn db_conn() -> Result<Connection, Box<dyn Error>> {
-    let mut full_config_dir_buf: PathBuf =
-        [&env::var("HOME").unwrap(), CONFIG_DIR].iter().collect();
+    let mut full_config_dir_buf: PathBuf = [&env::var("HOME").unwrap(), super::CONFIG_DIR]
+        .iter()
+        .collect();
 
     let full_config_dir = full_config_dir_buf.as_path();
     if !full_config_dir.exists() {
@@ -30,14 +30,28 @@ fn db_conn() -> Result<Connection, Box<dyn Error>> {
 
 pub fn init_config() -> Result<(), Box<dyn Error>> {
     let conn = db_conn()?;
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS proxies (
-            proxy_id INTEGER UNIQUE NOT NULL,
-            port INTEGER NOT NULL,
-            auto_start INTEGER NOT NULL
-        )",
-        (),
-    )?;
+    conn.execute_batch(&fs::read_to_string("./schema/config.sql")?)?;
+    Ok(())
+}
+
+pub fn project_list() -> Result<Vec<String>, Box<dyn Error>> {
+    let conn = db_conn()?;
+    let mut project_names = vec![];
+
+    let mut stmt = conn.prepare("SELECT name FROM projects")?;
+    let mut rows = stmt.query([])?;
+
+    while let Some(row) = rows.next()? {
+        project_names.push(row.get_unwrap(0));
+    }
+
+    Ok(project_names)
+}
+
+pub fn create_project(name: &str) -> Result<(), Box<dyn Error>> {
+    let conn = db_conn()?;
+
+    conn.execute("INSERT INTO projects (name) VALUES(?1)", [name])?;
 
     Ok(())
 }
