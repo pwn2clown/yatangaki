@@ -7,10 +7,9 @@ use crate::proxy::{
     self, service::ProxyServiceConfig, ProxyCommand, ProxyEvent, ProxyId, ProxyState,
 };
 use crate::Message;
-use iced::advanced::graphics::futures::subscription;
 use iced::futures::{channel::mpsc, SinkExt};
-use iced::widget::{Button, Column, Container, Row, Scrollable, Text, TextInput};
-use iced::{Command, Element, Length, Subscription};
+use iced::widget::{button, Button, Column, Container, Row, Scrollable, Text, TextInput};
+use iced::{Element, Length, Subscription, Task};
 use std::collections::HashMap;
 
 pub struct Proxy {
@@ -102,7 +101,7 @@ impl SettingsTabs {
 
             let mut button = Button::new(row).on_press(SettingsMessage::SelectProxy(proxy.id));
             if self.selected_proxy != Some(*id) {
-                button = button.style(iced::theme::Button::Secondary);
+                button = button.style(button::secondary);
             }
 
             proxy_list = proxy_list.push(button);
@@ -153,12 +152,12 @@ impl SettingsTabs {
         proxy_settings
     }
 
-    fn start_proxy_cmd(&mut self, id: ProxyId) -> Command<SettingsMessage> {
+    fn start_proxy_cmd(&mut self, id: ProxyId) -> Task<SettingsMessage> {
         let proxy = self.proxies.get_mut(&id).unwrap();
         proxy.status = ProxyState::Running;
         let command = proxy.command.clone();
 
-        Command::perform(
+        Task::perform(
             async move {
                 if let Some(mut cmd) = command {
                     cmd.send(ProxyCommand::Start).await.unwrap();
@@ -175,6 +174,8 @@ impl SettingsTabs {
         content.map(Message::SettingsMessage)
     }
 
+    //  https://github.com/iced-rs/iced/blob/master/futures/src/subscription.rs
+    //  https://github.com/iced-rs/iced/blob/master/futures/src/stream.rs
     pub fn subscription(&self) -> Subscription<Message> {
         let mut subscriptions = vec![];
         for proxy in self.proxies.values() {
@@ -182,19 +183,18 @@ impl SettingsTabs {
             let port = proxy.port;
             let proxy_service_config = ProxyServiceConfig::from(self.certificate_store.clone());
 
-            subscriptions.push(subscription::channel(
-                proxy_id,
-                100,
-                move |sender: mpsc::Sender<ProxyEvent>| {
-                    proxy::service::serve(proxy_id, port, sender, proxy_service_config)
-                },
-            ));
+            let stream =
+                iced::stream::channel(100, move |sender: mpsc::Sender<ProxyEvent>| async move {
+                    proxy::service::serve(proxy_id, port, sender, proxy_service_config).await
+                });
+
+            subscriptions.push(Subscription::run_with_id(proxy_id, stream));
         }
 
         Subscription::batch(subscriptions).map(Message::ProxyEvent)
     }
 
-    pub fn update(&mut self, message: SettingsMessage) -> Command<SettingsMessage> {
+    pub fn update(&mut self, message: SettingsMessage) -> Task<SettingsMessage> {
         match message {
             SettingsMessage::AddProxy => match self.proxy_port_request.parse::<u16>() {
                 Ok(port) => {
@@ -229,7 +229,7 @@ impl SettingsTabs {
                 let command = proxy.command.clone();
 
                 proxy.status = ProxyState::Stopped;
-                return Command::perform(
+                return Task::perform(
                     async move {
                         if let Some(mut cmd) = command {
                             cmd.send(ProxyCommand::Stop).await.unwrap();
@@ -257,6 +257,6 @@ impl SettingsTabs {
             SettingsMessage::Update => {}
         }
 
-        Command::none()
+        Task::none()
     }
 }

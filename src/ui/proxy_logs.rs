@@ -5,7 +5,7 @@ use iced::widget::pane_grid::Pane;
 use iced::widget::{
     button, column, container, pane_grid, row, scrollable, text, Column, Container, PaneGrid, Text,
 };
-use iced::{Command, Element, Length};
+use iced::{Element, Length, Task};
 
 type PacketId = usize;
 
@@ -48,15 +48,39 @@ impl ProxyLogs {
                     Some(packet_id) => self.request_viewer_view(packet_id),
                     None => text("no row selected").into(),
                 },
-                Panes::ResponseViewer => text("response content").into(),
+                Panes::ResponseViewer => match self.focused_row {
+                    Some(packet_id) => self.response_viewer_view(packet_id),
+                    None => text("no row selected").into(),
+                },
             })
         });
 
         container(pane_grid).padding(10).into()
     }
 
+    fn response_viewer_view(&self, packet_id: PacketId) -> Element<'_, Message> {
+        let content = match logs::get_full_response_row(packet_id) {
+            Ok(Some(response)) => {
+                let mut raw_request = format!("HTTP/1.1 {}\n", response.status_code);
+
+                for (key, value) in response.headers {
+                    raw_request.push_str(&format!("{key}: {value}\n"));
+                }
+
+                raw_request.push('\n');
+                raw_request.push_str(&String::from_utf8_lossy(&response.body));
+
+                text(raw_request)
+            }
+            Err(e) => text(format!("failed to get request: {e:#?}")),
+            _ => text("request not found"),
+        };
+
+        container(scrollable(content)).padding(10).into()
+    }
+
     fn request_viewer_view(&self, packet_id: PacketId) -> Element<'_, Message> {
-        let content = match logs::get_full_row(packet_id) {
+        let content = match logs::get_full_request_row(packet_id) {
             Ok(Some(log_row)) => {
                 let mut raw_request = format!(
                     "{} {} HTTP/1.1\n",
@@ -76,7 +100,7 @@ impl ProxyLogs {
             _ => text("request not found"),
         };
 
-        container(content).padding(10).into()
+        container(scrollable(content)).padding(10).into()
     }
 
     fn proxy_table_view(&self) -> Element<'_, Message> {
@@ -99,7 +123,7 @@ impl ProxyLogs {
             let mut row_button =
                 button(row).on_press(ProxyLogMessage::SelectPacket(summary.packet_id));
             if self.focused_row != Some(summary.packet_id) {
-                row_button = row_button.style(iced::theme::Button::Secondary);
+                row_button = row_button.style(button::primary);
             }
 
             rows = rows.push(row_button);
@@ -111,7 +135,7 @@ impl ProxyLogs {
         content.map(Message::ProxyLogMessage)
     }
 
-    pub fn update(&mut self, message: ProxyLogMessage) -> Command<ProxyLogMessage> {
+    pub fn update(&mut self, message: ProxyLogMessage) -> Task<ProxyLogMessage> {
         match message {
             ProxyLogMessage::ProxyEvent(event) => match event {
                 ProxyEvent::NewRequestLogRow => {}
@@ -140,6 +164,6 @@ impl ProxyLogs {
                 let _ = self.focused_row.insert(packet_id);
             }
         }
-        Command::none()
+        Task::none()
     }
 }

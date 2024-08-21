@@ -4,6 +4,8 @@ use rcgen::{
 };
 use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::collections::HashMap;
+use std::error::Error;
+use std::fs;
 use std::sync::{Arc, Mutex};
 use tokio_rustls::TlsAcceptor;
 
@@ -19,6 +21,18 @@ struct InnerCertificateStore {
 }
 
 impl CertificateStore {
+    pub fn save_certificate(&self) -> Result<(), Box<dyn Error>> {
+        let inner = self.inner.lock().unwrap();
+        let pem = inner.certificate_authority.pem();
+        let path = format!("{}/.yatangaki/ca.pem", env!("HOME"));
+
+        fs::write(path, pem)?;
+
+        Ok(())
+    }
+
+    //pub fn load_certificate() -> Result<Self, Box<dyn Error>> {}
+
     pub fn generate() -> Result<Self, rcgen::Error> {
         let certificate_authority_keypair = KeyPair::generate()?;
         let mut params = CertificateParams::default();

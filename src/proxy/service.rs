@@ -9,7 +9,6 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use iced::futures::{channel::mpsc, SinkExt};
-use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -39,7 +38,7 @@ pub async fn serve(
     port: u16,
     mut sender: mpsc::Sender<ProxyEvent>,
     config: ProxyServiceConfig,
-) -> Infallible {
+) {
     let mut state = ProxyState::Stopped;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let mut maybe_shutdown: Option<oneshot::Sender<()>> = None;

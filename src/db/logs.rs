@@ -23,11 +23,10 @@ pub struct PacketSummary {
     //  status_code: Option<usize>,
 }
 
-pub struct HttpLogRow {
+pub struct HttpRequestLogRow {
     pub request_summary: PacketSummary,
     pub request_body: Vec<u8>,
     pub request_headers: HashMap<String, String>,
-    pub response: Option<HttpResponseLogRow>,
 }
 
 pub struct HttpResponseLogRow {
@@ -83,6 +82,8 @@ pub fn insert_request(
         return Err(DbError::NoDatabaseSelected);
     };
 
+    let packet_id = db.packet_index;
+
     let uri = request.uri();
     db.conn
         .execute(
@@ -108,12 +109,12 @@ pub fn insert_request(
 
     for (key, value) in request.headers() {
         pstmt
-            .execute((db.packet_index, key.as_str(), value.to_str().unwrap()))
+            .execute((packet_id, key.as_str(), value.to_str().unwrap()))
             .map_err(DbError::SqliteError)?;
     }
 
     db.packet_index += 1;
-    Ok(db.packet_index)
+    Ok(packet_id)
 }
 
 pub fn insert_response(
@@ -131,6 +132,17 @@ pub fn insert_response(
             (packet_id, response.status().as_u16(), body.to_vec()),
         )
         .map_err(DbError::SqliteError)?;
+
+    let mut pstmt = db
+        .conn
+        .prepare("INSERT INTO response_headers (packet_id, key, value) VALUES (?1, ?2, ?3)")
+        .map_err(DbError::SqliteError)?;
+
+    for (key, value) in response.headers() {
+        pstmt
+            .execute((packet_id, key.as_str(), value.to_str().unwrap()))
+            .map_err(DbError::SqliteError)?;
+    }
 
     Ok(())
 }
@@ -162,7 +174,7 @@ pub fn get_packets_summary() -> Result<Vec<PacketSummary>, DbError> {
     Ok(packet_summaries)
 }
 
-pub fn get_full_row(packet_id: PacketId) -> Result<Option<HttpLogRow>, DbError> {
+pub fn get_full_request_row(packet_id: PacketId) -> Result<Option<HttpRequestLogRow>, DbError> {
     let Some(ref mut db) = *DB.lock().unwrap() else {
         return Err(DbError::NoDatabaseSelected);
     };
@@ -174,9 +186,9 @@ pub fn get_full_row(packet_id: PacketId) -> Result<Option<HttpLogRow>, DbError> 
 
     let mut rows = stmt.query([packet_id]).map_err(DbError::SqliteError)?;
 
-    let mut headers = HashMap::default();
+    let mut request_headers = HashMap::default();
     while let Some(row) = rows.next().map_err(DbError::SqliteError)? {
-        headers.insert(row.get_unwrap(0), row.get_unwrap(1));
+        request_headers.insert(row.get_unwrap(0), row.get_unwrap(1));
     }
 
     let mut stmt = db
@@ -186,23 +198,51 @@ pub fn get_full_row(packet_id: PacketId) -> Result<Option<HttpLogRow>, DbError> 
     let mut rows = stmt.query([packet_id]).map_err(DbError::SqliteError)?;
 
     Ok(match rows.next().map_err(DbError::SqliteError)? {
-        Some(row) => {
-            let http_log = HttpLogRow {
-                request_summary: PacketSummary {
-                    packet_id: row.get(0).unwrap(),
-                    proxy_id: row.get(1).unwrap(),
-                    method: row.get(2).unwrap(),
-                    authority: row.get(3).unwrap(),
-                    path: row.get(4).unwrap(),
-                    query: row.get(5).unwrap_or_default(),
-                },
-                request_body: row.get_unwrap(6),
-                request_headers: headers,
-                response: None,
-            };
+        Some(row) => Some(HttpRequestLogRow {
+            request_summary: PacketSummary {
+                packet_id: row.get(0).unwrap(),
+                proxy_id: row.get(1).unwrap(),
+                method: row.get(2).unwrap(),
+                authority: row.get(3).unwrap(),
+                path: row.get(4).unwrap(),
+                query: row.get(5).unwrap_or_default(),
+            },
+            request_body: row.get_unwrap(6),
+            request_headers,
+        }),
+        None => None,
+    })
+}
 
-            Some(http_log)
-        }
+pub fn get_full_response_row(packet_id: PacketId) -> Result<Option<HttpResponseLogRow>, DbError> {
+    let Some(ref mut db) = *DB.lock().unwrap() else {
+        return Err(DbError::NoDatabaseSelected);
+    };
+
+    let mut stmt = db
+        .conn
+        .prepare("SELECT key, value FROM response_headers WHERE packet_id = ?1;")
+        .map_err(DbError::SqliteError)?;
+
+    let mut rows = stmt.query([packet_id]).map_err(DbError::SqliteError)?;
+    let mut headers = HashMap::default();
+    while let Some(row) = rows.next().map_err(DbError::SqliteError)? {
+        headers.insert(row.get_unwrap(0), row.get_unwrap(1));
+    }
+
+    let mut stmt = db
+        .conn
+        .prepare("SELECT status, body FROM responses WHERE packet_id = ?1;")
+        .map_err(DbError::SqliteError)?;
+
+    let mut rows = stmt.query([packet_id]).map_err(DbError::SqliteError)?;
+
+    Ok(match rows.next().map_err(DbError::SqliteError)? {
+        Some(row) => Some(HttpResponseLogRow {
+            status_code: row.get_unwrap(0),
+            headers,
+            body: row.get_unwrap(1),
+        }),
         None => None,
     })
 }

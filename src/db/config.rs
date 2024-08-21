@@ -5,6 +5,8 @@ use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 
+use super::CONFIG_DIR;
+
 const CONFIG_FILE: &str = "config.db";
 
 pub struct ProxyConfig {
@@ -49,10 +51,13 @@ pub fn project_list() -> Result<Vec<String>, Box<dyn Error>> {
 }
 
 pub fn create_project(name: &str) -> Result<(), Box<dyn Error>> {
-    let conn = db_conn()?;
+    db_conn()?.execute("INSERT INTO projects (name) VALUES(?1)", [name])?;
+    Ok(())
+}
 
-    conn.execute("INSERT INTO projects (name) VALUES(?1)", [name])?;
-
+pub fn delete_project(name: &str) -> Result<(), Box<dyn Error>> {
+    db_conn()?.execute("DELETE FROM projects WHERE name = ?1", [name])?;
+    fs::remove_dir_all(format!("{}/{}/{name}", env!("HOME"), CONFIG_DIR))?;
     Ok(())
 }
 
@@ -84,5 +89,9 @@ pub fn save_proxy(proxy: &ProxyConfig) -> Result<(), Box<dyn Error>> {
         if proxy.auto_start { 1 } else { 0 },
     ))?;
 
+    Ok(())
+}
+
+pub fn delete_proxy(proxy_id: ProxyId) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
