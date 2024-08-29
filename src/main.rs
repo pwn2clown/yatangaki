@@ -52,6 +52,14 @@ impl Default for App {
 }
 
 impl App {
+    fn title(&self) -> String {
+        let mut base_title = "Yatangaki".to_owned();
+        if let AppState::ProjectLoaded(project_name) = &self.state {
+            base_title.push_str(&format!(" - [{project_name}]"));
+        }
+        base_title
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::TabSelected(tab_id) => {
@@ -147,7 +155,7 @@ enum TabId {
 }
 
 fn main() -> iced::Result {
-    iced::application("Yatangaki", App::update, App::view)
+    iced::application(App::title, App::update, App::view)
         .subscription(App::subscription)
         .run()
 }

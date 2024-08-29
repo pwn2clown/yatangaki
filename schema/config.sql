@@ -5,6 +5,5 @@ CREATE TABLE IF NOT EXISTS proxies (
 );
 
 CREATE TABLE IF NOT EXISTS projects (
-	project_id INTEGER UNIQUE NOT NULL,
         name TEXT NOT NULL
 );

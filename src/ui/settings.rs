@@ -8,7 +8,7 @@ use crate::proxy::{
 };
 use crate::Message;
 use iced::futures::{channel::mpsc, SinkExt};
-use iced::widget::{button, Button, Column, Container, Row, Scrollable, Text, TextInput};
+use iced::widget::{button, column, row, text, Button, Column, Row, Scrollable, Text, TextInput};
 use iced::{Element, Length, Subscription, Task};
 use std::collections::HashMap;
 
@@ -22,7 +22,6 @@ pub struct Proxy {
 }
 
 pub struct SettingsTabs {
-    is_port_format_error: bool,
     proxy_port_request: String,
     proxies: HashMap<ProxyId, Proxy>,
     selected_proxy: Option<ProxyId>,
@@ -47,7 +46,6 @@ impl SettingsTabs {
         }
 
         let mut settings = Self {
-            is_port_format_error: false,
             proxy_port_request: String::default(),
             proxies: HashMap::default(),
             selected_proxy: None,
@@ -76,28 +74,36 @@ impl SettingsTabs {
         );
     }
 
-    pub fn proxy_settings_view(&self) -> Row<'_, SettingsMessage> {
-        let mut proxy_table = Column::new().width(200.0);
-        let header_row = Row::new()
-            .push(Text::new("id").width(Length::Fixed(50.0)))
-            .push(Text::new("port").width(Length::Fixed(150.0)));
+    fn start_proxy_cmd(&mut self, id: ProxyId) -> Task<SettingsMessage> {
+        let proxy = self.proxies.get_mut(&id).unwrap();
+        proxy.status = ProxyState::Running;
+        let command = proxy.command.clone();
 
-        proxy_table = proxy_table.push(header_row);
+        Task::perform(
+            async move {
+                if let Some(mut cmd) = command {
+                    cmd.send(ProxyCommand::Start).await.unwrap();
+                }
+            },
+            |_| SettingsMessage::Update,
+        )
+    }
+
+    pub fn proxy_settings_view(&self) -> Element<'_, SettingsMessage> {
+        let header_row = row!(
+            text("id").width(Length::Fixed(50.0)),
+            text("port").width(Length::Fixed(150.0))
+        );
 
         let mut proxy_list = Column::new();
         for (id, proxy) in &self.proxies {
-            let row = Row::new()
-                .push(
-                    Text::new(id.to_string())
-                        .width(Length::Fixed(50.0))
-                        .size(12.0),
-                )
-                .push(
-                    Text::new(proxy.port.to_string())
-                        .width(Length::Fixed(150.0))
-                        .size(12.0),
-                )
-                .height(Length::Fixed(16.0));
+            let row = row!(
+                text(id.to_string()).width(Length::Fixed(50.0)).size(12.0),
+                text(proxy.port.to_string())
+                    .width(Length::Fixed(150.0))
+                    .size(12.0),
+            )
+            .height(Length::Fixed(16.0));
 
             let mut button = Button::new(row).on_press(SettingsMessage::SelectProxy(proxy.id));
             if self.selected_proxy != Some(*id) {
@@ -107,9 +113,6 @@ impl SettingsTabs {
             proxy_list = proxy_list.push(button);
         }
 
-        proxy_table =
-            proxy_table.push(Scrollable::new(proxy_list).height(Length::Fixed(16.0 * 5.0)));
-
         let proxy_port_field = TextInput::new("enter proxy port", &self.proxy_port_request)
             .on_input(SettingsMessage::ProxyPortRequest)
             .width(Length::Fixed(150.0));
@@ -117,9 +120,14 @@ impl SettingsTabs {
         let submit_proxy: Button<'_, SettingsMessage> =
             Button::new("add").on_press(SettingsMessage::AddProxy);
 
-        proxy_table = proxy_table.push(Row::new().push(proxy_port_field).push(submit_proxy));
+        let mut proxy_table = column![
+            header_row,
+            Scrollable::new(proxy_list).height(Length::Fixed(16.0 * 5.0)),
+            row!(proxy_port_field, submit_proxy)
+        ]
+        .width(200.0);
 
-        if self.is_port_format_error {
+        if self.proxy_port_request.parse::<u16>().is_err() && !self.proxy_port_request.is_empty() {
             proxy_table = proxy_table.push(Text::new("error: bad port format"));
         }
 
@@ -149,28 +157,11 @@ impl SettingsTabs {
             proxy_settings = proxy_settings.push(Text::new("no proxy selected"));
         };
 
-        proxy_settings
-    }
-
-    fn start_proxy_cmd(&mut self, id: ProxyId) -> Task<SettingsMessage> {
-        let proxy = self.proxies.get_mut(&id).unwrap();
-        proxy.status = ProxyState::Running;
-        let command = proxy.command.clone();
-
-        Task::perform(
-            async move {
-                if let Some(mut cmd) = command {
-                    cmd.send(ProxyCommand::Start).await.unwrap();
-                }
-            },
-            |_| SettingsMessage::Update,
-        )
+        super::commons::bordered_view(proxy_settings.into())
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        let content: Element<'_, SettingsMessage> = Container::new(self.proxy_settings_view())
-            .padding(20.0)
-            .into();
+        let content: Element<'_, SettingsMessage> = self.proxy_settings_view();
         content.map(Message::SettingsMessage)
     }
 
@@ -196,8 +187,8 @@ impl SettingsTabs {
 
     pub fn update(&mut self, message: SettingsMessage) -> Task<SettingsMessage> {
         match message {
-            SettingsMessage::AddProxy => match self.proxy_port_request.parse::<u16>() {
-                Ok(port) => {
+            SettingsMessage::AddProxy => {
+                if let Ok(port) = self.proxy_port_request.parse::<u16>() {
                     let proxy = ProxyConfig {
                         port,
                         id: self.proxies.len(),
@@ -205,25 +196,20 @@ impl SettingsTabs {
                     };
 
                     self.add_proxy(&proxy);
-
                     self.proxy_port_request = String::default();
-                    self.is_port_format_error = false;
-
                     let _ = config::save_proxy(&proxy)
                         .inspect_err(|e| println!("failed to save proxy: {e}"));
                 }
-                Err(_err) => {
-                    self.is_port_format_error = true;
-                }
-            },
+            }
             SettingsMessage::SelectProxy(proxy_id) => {
                 let _ = self.selected_proxy.insert(proxy_id);
             }
             SettingsMessage::ProxyPortRequest(port) => {
-                self.is_port_format_error = port.parse::<u16>().is_err() && !port.is_empty();
                 self.proxy_port_request = port;
             }
-            SettingsMessage::StartProxy(_id) => {}
+            SettingsMessage::StartProxy(id) => {
+                return self.start_proxy_cmd(id);
+            }
             SettingsMessage::StopProxy(id) => {
                 let proxy = self.proxies.get_mut(&id).unwrap();
                 let command = proxy.command.clone();

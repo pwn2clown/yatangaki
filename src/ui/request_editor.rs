@@ -23,7 +23,7 @@ impl RequestEditor {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        text("request editor").into()
+        super::commons::bordered_view(text("request editor").into())
     }
 
     pub fn update(&mut self, _message: EditorMessage) -> Task<EditorMessage> {

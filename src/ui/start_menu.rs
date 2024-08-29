@@ -1,6 +1,6 @@
 use crate::db::config;
 use crate::Message;
-use iced::widget::{button, row, text, Button, Column, Container, Row, TextInput};
+use iced::widget::{button, column, row, text, Button, Column, Row, TextInput};
 use iced::{Element, Length, Task};
 use iced_aw::SelectionList;
 
@@ -35,7 +35,7 @@ impl StartMenu {
         }
     }
 
-    fn project_list_view(&self) -> Column<'_, StartMenuMessage> {
+    fn project_list_view(&self) -> Element<'_, StartMenuMessage> {
         let select_list_width = Length::Fixed(400.0);
 
         let project_list = SelectionList::new(&self.projects, StartMenuMessage::SelectedProject)
@@ -54,14 +54,13 @@ impl StartMenu {
             .push(add_project_button)
             .width(select_list_width);
 
-        Column::new()
-            .push(text("Select project:"))
-            .push(project_list)
-            .push(project_name_input)
+        super::commons::bordered_view(
+            column![text("Select project:"), project_list, project_name_input].into(),
+        )
     }
 
     fn selected_project_menu(&self) -> Element<'_, StartMenuMessage> {
-        match self.selected_project_index {
+        let content: Element<'_, StartMenuMessage> = match self.selected_project_index {
             Some(index) => {
                 let selected_project_name = self.projects.get(index).unwrap();
 
@@ -73,7 +72,8 @@ impl StartMenu {
                     .on_press(StartMenuMessage::DeleteProject(
                         selected_project_name.clone(),
                         index,
-                    ));
+                    ))
+                    .style(button::danger);
 
                 Column::new()
                     .push(load_project_button)
@@ -81,13 +81,15 @@ impl StartMenu {
                     .into()
             }
             None => text("no project selected").into(),
-        }
+        };
+
+        super::commons::bordered_view(content)
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        let content = row!(self.project_list_view(), self.selected_project_menu()).spacing(50);
+        let content: Element<'_, StartMenuMessage> =
+            row!(self.project_list_view(), self.selected_project_menu()).into();
 
-        let content: Element<'_, StartMenuMessage> = Container::new(content).padding(20.0).into();
         content.map(Message::StartMenuEvent)
     }
 
@@ -95,7 +97,7 @@ impl StartMenu {
         match message {
             StartMenuMessage::CreateProject(project_name) => {
                 if !project_name.is_empty() {
-                    let _ = config::create_project(&project_name);
+                    config::create_project(&project_name).expect("failed to save project");
                     self.projects.push(project_name);
                     self.input_project_name = String::default();
                 }
