@@ -7,8 +7,11 @@ use crate::proxy::{
     self, service::ProxyServiceConfig, ProxyCommand, ProxyEvent, ProxyId, ProxyState,
 };
 use crate::Message;
-use iced::futures::{channel::mpsc, SinkExt};
-use iced::widget::{button, column, row, text, Button, Column, Row, Scrollable, Text, TextInput};
+use iced::widget::{button, column, row, text, vertical_rule, Column, Scrollable};
+use iced::{
+    futures::{channel::mpsc, SinkExt},
+    widget::text_input,
+};
 use iced::{Element, Length, Subscription, Task};
 use std::collections::HashMap;
 
@@ -36,6 +39,7 @@ pub enum SettingsMessage {
     StartProxy(ProxyId),
     StopProxy(ProxyId),
     ProxyEvent(ProxyEvent),
+    StartBrowser(u16),
     Update,
 }
 
@@ -90,22 +94,17 @@ impl SettingsTabs {
     }
 
     pub fn proxy_settings_view(&self) -> Element<'_, SettingsMessage> {
-        let header_row = row!(
-            text("id").width(Length::Fixed(50.0)),
-            text("port").width(Length::Fixed(150.0))
-        );
-
         let mut proxy_list = Column::new();
         for (id, proxy) in &self.proxies {
-            let row = row!(
-                text(id.to_string()).width(Length::Fixed(50.0)).size(12.0),
-                text(proxy.port.to_string())
-                    .width(Length::Fixed(150.0))
-                    .size(12.0),
+            let mut button = button(
+                row!(
+                    text(id).width(Length::Fixed(50.0)).size(12.0),
+                    text(proxy.port).width(Length::Fixed(150.0)).size(12.0),
+                )
+                .height(Length::Fixed(16.0)),
             )
-            .height(Length::Fixed(16.0));
+            .on_press(SettingsMessage::SelectProxy(proxy.id));
 
-            let mut button = Button::new(row).on_press(SettingsMessage::SelectProxy(proxy.id));
             if self.selected_proxy != Some(*id) {
                 button = button.style(button::secondary);
             }
@@ -113,48 +112,48 @@ impl SettingsTabs {
             proxy_list = proxy_list.push(button);
         }
 
-        let proxy_port_field = TextInput::new("enter proxy port", &self.proxy_port_request)
-            .on_input(SettingsMessage::ProxyPortRequest)
-            .width(Length::Fixed(150.0));
-
-        let submit_proxy: Button<'_, SettingsMessage> =
-            Button::new("add").on_press(SettingsMessage::AddProxy);
-
         let mut proxy_table = column![
-            header_row,
+            row!(
+                text("id").width(Length::Fixed(50.0)),
+                text("port").width(Length::Fixed(150.0))
+            ),
             Scrollable::new(proxy_list).height(Length::Fixed(16.0 * 5.0)),
-            row!(proxy_port_field, submit_proxy)
+            row!(
+                text_input("enter proxy port", &self.proxy_port_request)
+                    .on_input(SettingsMessage::ProxyPortRequest)
+                    .width(Length::Fixed(150.0)),
+                button("add").on_press(SettingsMessage::AddProxy).height(30)
+            )
         ]
         .width(200.0);
 
         if self.proxy_port_request.parse::<u16>().is_err() && !self.proxy_port_request.is_empty() {
-            proxy_table = proxy_table.push(Text::new("error: bad port format"));
+            proxy_table = proxy_table.push(text("error: bad port format"));
         }
 
-        let mut proxy_settings = Row::new().push(proxy_table).spacing(30);
+        let mut proxy_settings = row!(proxy_table, vertical_rule(1)).spacing(30);
 
         if let Some(id) = self.selected_proxy {
             let mut config = Column::new();
 
             if let Some(proxy) = self.proxies.get(&id) {
-                let button: Button<'_, SettingsMessage> = match proxy.status {
-                    ProxyState::Running => {
-                        Button::new("stop").on_press(SettingsMessage::StopProxy(id))
-                    }
-                    ProxyState::Stopped | ProxyState::Error => {
-                        Button::new("start").on_press(SettingsMessage::StartProxy(id))
-                    }
-                };
+                config = config.push(match proxy.status {
+                    ProxyState::Running => button("stop").on_press(SettingsMessage::StopProxy(id)),
+                    _ => button("start").on_press(SettingsMessage::StartProxy(id)),
+                });
 
-                config = config.push(button);
+                proxy_settings = proxy_settings.push(
+                    button("Start browser").on_press(SettingsMessage::StartBrowser(proxy.port)),
+                );
+
                 if proxy.status == ProxyState::Error {
-                    config = config.push(Text::new("an error occured"));
+                    config = config.push(text("an error occured"));
                 }
             }
 
             proxy_settings = proxy_settings.push(config);
         } else {
-            proxy_settings = proxy_settings.push(Text::new("no proxy selected"));
+            proxy_settings = proxy_settings.push(text("no proxy selected"));
         };
 
         super::commons::bordered_view(proxy_settings.into())
@@ -240,6 +239,19 @@ impl SettingsTabs {
                 }
                 _ => {}
             },
+            SettingsMessage::StartBrowser(port) => {
+                return Task::perform(
+                    async move {
+                        let mut child = tokio::process::Command::new("chromium-browser")
+                            .arg(&format!("--proxy-server=localhost:{port}"))
+                            .spawn()
+                            .expect("skill issue");
+
+                        let _ = child.wait().await.unwrap();
+                    },
+                    |_| SettingsMessage::Update,
+                )
+            }
             SettingsMessage::Update => {}
         }
 

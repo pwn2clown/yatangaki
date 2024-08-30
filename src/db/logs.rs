@@ -19,8 +19,6 @@ pub struct PacketSummary {
     pub authority: String,
     pub path: String,
     pub query: String,
-    //  TODO: add optionnal response elements
-    //  status_code: Option<usize>,
 }
 
 pub struct HttpRequestLogRow {

@@ -3,8 +3,8 @@ use crate::proxy::ProxyEvent;
 use crate::Message;
 use iced::widget::pane_grid::Pane;
 use iced::widget::{
-    button, column, container, pane_grid, row, scrollable, text, text_input, Column, Container,
-    PaneGrid, Text,
+    button, column, container, horizontal_space, pane_grid, row, scrollable, text, text_input,
+    Column, Container, PaneGrid,
 };
 use iced::{Element, Length, Task};
 
@@ -76,40 +76,40 @@ impl ProxyLogs {
     }
 
     fn proxy_table_view(&self) -> Element<'_, Message> {
-        let searchbar = text_input("Search", &self.raw_search_query)
-            .width(Length::Fill)
-            .on_input(ProxyLogMessage::UpdateQuery);
-
-        let header = row!(
-            Text::new("Id").width(Length::Fixed(75.0)),
-            Text::new("Pxy id").width(Length::Fixed(75.0)),
-            Text::new("Authority").width(Length::Fixed(400.0)),
-            Text::new("Path").width(Length::Fill)
-        );
-
         let mut rows = Column::new();
 
         for summary in logs::get_packets_summary().unwrap() {
-            let row = row!(
-                Text::new(summary.packet_id.to_string()).width(Length::Fixed(75.0)),
-                Text::new(summary.proxy_id.to_string()).width(Length::Fixed(75.0)),
-                Text::new(summary.authority).width(Length::Fixed(400.0)),
-                Text::new(summary.path).width(Length::Fill)
-            );
+            let mut row_button = button(row!(
+                text(summary.packet_id).width(Length::Fixed(75.0)),
+                text(summary.proxy_id).width(Length::Fixed(75.0)),
+                text(summary.authority).width(Length::Fixed(400.0)),
+                text(summary.path).width(Length::Fill)
+            ))
+            .on_press(ProxyLogMessage::SelectPacket(summary.packet_id));
 
-            let mut row_button =
-                button(row).on_press(ProxyLogMessage::SelectPacket(summary.packet_id));
             if self.focused_row != Some(summary.packet_id) {
-                row_button = row_button.style(button::primary);
+                row_button = row_button.style(button::secondary);
             }
 
             rows = rows.push(row_button);
         }
 
-        let content: Element<'_, ProxyLogMessage> =
-            Container::new(column![searchbar, header, scrollable(rows)])
-                .padding(20.0)
-                .into();
+        let content: Element<'_, ProxyLogMessage> = Container::new(column![
+            text_input("Search", &self.raw_search_query)
+                .width(Length::Fill)
+                .on_input(ProxyLogMessage::UpdateQuery),
+            horizontal_space().height(15),
+            row!(
+                text("Id").width(Length::Fixed(75.0)),
+                text("Pxy id").width(Length::Fixed(75.0)),
+                text("Authority").width(Length::Fixed(400.0)),
+                text("Path").width(Length::Fill)
+            ),
+            scrollable(rows)
+        ])
+        .padding(20.0)
+        .into();
+
         content.map(Message::ProxyLogMessage)
     }
 

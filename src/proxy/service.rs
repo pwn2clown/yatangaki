@@ -99,11 +99,9 @@ async fn service(
 
             loop {
                 let (stream, _socket_addr) = listener.accept().await.unwrap();
-                let io = TokioIo::new(stream);
-                let s = service_fn(|req| proxify_request(req, sender_cloned.clone(), service.clone()));
 
                 match http1::Builder::new()
-                    .serve_connection(io, s)
+                    .serve_connection(TokioIo::new(stream), service_fn(|req| proxify_request(req, sender_cloned.clone(), service.clone())))
                     .with_upgrades()
                     .await
                 {

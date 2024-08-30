@@ -1,6 +1,6 @@
 use crate::db::config;
 use crate::Message;
-use iced::widget::{button, column, row, text, Button, Column, Row, TextInput};
+use iced::widget::{button, column, row, text, vertical_rule, Button, TextInput};
 use iced::{Element, Length, Task};
 use iced_aw::SelectionList;
 
@@ -38,57 +38,55 @@ impl StartMenu {
     fn project_list_view(&self) -> Element<'_, StartMenuMessage> {
         let select_list_width = Length::Fixed(400.0);
 
-        let project_list = SelectionList::new(&self.projects, StartMenuMessage::SelectedProject)
-            .height(Length::Fixed(200.0))
-            .width(select_list_width);
-
-        let add_project_button: Button<'_, StartMenuMessage> = button("Add").on_press(
-            StartMenuMessage::CreateProject(self.input_project_name.clone()),
-        );
-
-        let project_name_input = Row::new()
-            .push(
+        column![
+            text("Select project:"),
+            SelectionList::new(&self.projects, StartMenuMessage::SelectedProject)
+                .height(Length::Fixed(200.0))
+                .width(select_list_width),
+            row!(
                 TextInput::new("New project", &self.input_project_name)
                     .on_input(StartMenuMessage::UpdateProjectName),
+                button("Add").on_press(StartMenuMessage::CreateProject(
+                    self.input_project_name.clone()
+                ),)
             )
-            .push(add_project_button)
-            .width(select_list_width);
-
-        super::commons::bordered_view(
-            column![text("Select project:"), project_list, project_name_input].into(),
-        )
+            .width(select_list_width)
+        ]
+        .into()
     }
 
     fn selected_project_menu(&self) -> Element<'_, StartMenuMessage> {
-        let content: Element<'_, StartMenuMessage> = match self.selected_project_index {
+        match self.selected_project_index {
             Some(index) => {
                 let selected_project_name = self.projects.get(index).unwrap();
 
-                let load_project_button: Button<'_, StartMenuMessage> = button("Load").on_press(
-                    StartMenuMessage::LoadSelectedProject(selected_project_name.clone()),
-                );
-
-                let delete_project_button: Button<'_, StartMenuMessage> = button("Delete")
-                    .on_press(StartMenuMessage::DeleteProject(
-                        selected_project_name.clone(),
-                        index,
-                    ))
-                    .style(button::danger);
-
-                Column::new()
-                    .push(load_project_button)
-                    .push(delete_project_button)
-                    .into()
+                column!(
+                    button("Load").on_press(StartMenuMessage::LoadSelectedProject(
+                        selected_project_name.clone()
+                    )),
+                    button("Delete")
+                        .on_press(StartMenuMessage::DeleteProject(
+                            selected_project_name.clone(),
+                            index,
+                        ))
+                        .style(button::danger)
+                )
+                .into()
             }
             None => text("no project selected").into(),
-        };
-
-        super::commons::bordered_view(content)
+        }
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        let content: Element<'_, StartMenuMessage> =
-            row!(self.project_list_view(), self.selected_project_menu()).into();
+        let content: Element<'_, StartMenuMessage> = super::commons::bordered_view(
+            row!(
+                self.project_list_view(),
+                vertical_rule(1),
+                self.selected_project_menu()
+            )
+            .spacing(30)
+            .into(),
+        );
 
         content.map(Message::StartMenuEvent)
     }

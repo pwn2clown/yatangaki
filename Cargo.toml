@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 iced = { version = "0.13.0-dev", git = "https://github.com/iced-rs/iced", features = ["advanced", "tokio"] }
 iced_aw = { version = "0.9.3", git ="https://github.com/iced-rs/iced_aw" }
-tokio = { version = "1", features = ["time", "sync", "net", "macros", "rt"] }
+tokio = { version = "1", features = ["time", "sync", "net", "macros", "rt", "process"] }
 hyper = { version = "1", default-features = false, features = ["http1", "server"] }
 hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
 http-body-util = "0.1"
