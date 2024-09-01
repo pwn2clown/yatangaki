@@ -2,11 +2,13 @@
 
 Yatangaki is a MITM proxy for HTTP designed for web security testing.
 
+The purpose of this project is to waste my spare time and sanity by implementing this garbage. Use it at your own risks.
+
 ## Features
 
-- HTTP/HTTPS interception
+- HTTP/HTTPS interception (no websocket yet)
 - Native GUI (no bloated javascript or embebbed browser)
-- SQLite database for requests logging
+- SQLite database for network logs
 
 ## Install prequisites
 
@@ -17,5 +19,5 @@ MSRV: 1.80
 Fedora/RHEL:
 
 ```
-$ dnf install sqlite-devel sqlite.x86_64 chromium -y
+$ dnf install sqlite-devel sqlite.x86_64 chromium nss-tools -y
 ```

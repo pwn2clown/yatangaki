@@ -131,22 +131,18 @@ async fn proxify_request(
         return Ok(res);
     };
 
-    let authority_key = authority.unwrap().to_string();
-    let owned_authority = authority.cloned();
+    let authority = authority.unwrap().to_owned();
+    let host = authority.host().to_owned();
 
     if *req.method() == Method::CONNECT {
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(to_upgrade) => {
-                    let acceptor = service
-                        .config
-                        .certificates
-                        .tls_acceptor(&authority_key)
-                        .unwrap();
+                    let acceptor = service.config.certificates.tls_acceptor(&host).unwrap();
 
                     //  Acceptor will generate an error if the client rejects the certificate
                     if let Ok(stream) = acceptor.accept(TokioIo::new(to_upgrade)).await {
-                        http1::Builder::new()
+                        let _ = http1::Builder::new()
                             .serve_connection(
                                 TokioIo::new(stream),
                                 service_fn(move |req| {
@@ -154,14 +150,13 @@ async fn proxify_request(
                                         req,
                                         sender.clone(),
                                         Scheme::HTTPS,
-                                        owned_authority.clone(),
+                                        authority.clone(),
                                         service.proxy_id,
                                     )
                                 }),
                             )
                             .with_upgrades()
-                            .await
-                            .unwrap();
+                            .await;
                     };
                 }
                 Err(_err) => {
@@ -173,21 +168,21 @@ async fn proxify_request(
         return Ok(Response::default());
     }
 
-    forward_packet(req, sender, Scheme::HTTP, owned_authority, service.proxy_id).await
+    forward_packet(req, sender, Scheme::HTTP, authority, service.proxy_id).await
 }
 
 async fn forward_packet(
     req: Request<Incoming>,
     mut sender: mpsc::Sender<ProxyEvent>,
     scheme: Scheme,
-    authority: Option<Authority>,
+    authority: Authority,
     proxy_id: usize,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     //  Building full uri for client
     let mut uri_parts = Parts::default();
     uri_parts.path_and_query = req.uri().path_and_query().cloned();
     uri_parts.scheme = Some(scheme);
-    uri_parts.authority = authority;
+    uri_parts.authority = Some(authority);
 
     let full_uri = Uri::from_parts(uri_parts).unwrap();
 

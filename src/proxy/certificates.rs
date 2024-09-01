@@ -24,21 +24,24 @@ impl CertificateStore {
     pub fn save_certificate(&self) -> Result<(), Box<dyn Error>> {
         let inner = self.inner.lock().unwrap();
         let pem = inner.certificate_authority.pem();
-        let path = format!("{}/.yatangaki/ca.pem", env!("HOME"));
+        let ca_path = format!("{}/.yatangaki/ca.pem", env!("HOME"));
+        let ca_key_path = format!("{}/.yatangaki/ca_key.pem", env!("HOME"));
 
-        fs::write(path, pem)?;
+        fs::write(ca_path, pem)?;
+        fs::write(
+            ca_key_path,
+            inner.certificate_authority_keypair.serialize_pem(),
+        )?;
 
         Ok(())
     }
 
-    //pub fn load_certificate() -> Result<Self, Box<dyn Error>> {}
+    pub fn load_certificate() -> Result<Self, Box<dyn Error>> {
+        let ca_path = format!("{}/.yatangaki/ca.pem", env!("HOME"));
+        let ca_key_path = format!("{}/.yatangaki/ca_key.pem", env!("HOME"));
 
-    pub fn generate() -> Result<Self, rcgen::Error> {
-        let certificate_authority_keypair = KeyPair::generate()?;
-        let mut params = CertificateParams::default();
-        params.not_before = date_time_ymd(2023, 1, 1);
-        params.not_after = date_time_ymd(4096, 1, 1);
-        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let params = CertificateParams::from_ca_cert_pem(&fs::read_to_string(ca_path)?)?;
+        let certificate_authority_keypair = KeyPair::from_pem(&fs::read_to_string(ca_key_path)?)?;
         let certificate_authority = params.self_signed(&certificate_authority_keypair)?;
 
         Ok(Self {
@@ -50,11 +53,32 @@ impl CertificateStore {
         })
     }
 
-    pub fn tls_acceptor(&mut self, authority: &str) -> Result<TlsAcceptor, rcgen::Error> {
+    pub fn generate() -> Result<Self, rcgen::Error> {
+        let certificate_authority_keypair = KeyPair::generate()?;
+        let mut params = CertificateParams::default();
+        params.not_before = date_time_ymd(2023, 1, 1);
+        params.not_after = date_time_ymd(4096, 1, 1);
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "yatangaki_ca");
+
+        let certificate_authority = params.self_signed(&certificate_authority_keypair)?;
+
+        Ok(Self {
+            inner: Arc::new(Mutex::new(InnerCertificateStore {
+                certificate_authority_keypair,
+                certificate_authority,
+                entity_certificates: HashMap::default(),
+            })),
+        })
+    }
+
+    pub fn tls_acceptor(&mut self, host: &str) -> Result<TlsAcceptor, rcgen::Error> {
         let mut inner = self.inner.lock().unwrap();
 
-        if !inner.entity_certificates.contains_key(authority) {
-            let san = SanType::DnsName(Ia5String::try_from(authority).unwrap());
+        if !inner.entity_certificates.contains_key(host) {
+            let san = SanType::DnsName(Ia5String::try_from(host).unwrap());
             let mut params = CertificateParams::default();
             params.is_ca = rcgen::IsCa::NoCa;
             params.not_before = date_time_ymd(2023, 1, 1);
@@ -64,7 +88,7 @@ impl CertificateStore {
             params.subject_alt_names = vec![san];
             params
                 .distinguished_name
-                .push(rcgen::DnType::CommonName, "rcgen entity cert");
+                .push(rcgen::DnType::CommonName, host);
 
             let keys = KeyPair::generate()?;
             let certificate = params.signed_by(
@@ -83,9 +107,9 @@ impl CertificateStore {
                 .unwrap();
 
             let acceptor = TlsAcceptor::from(Arc::new(tls_config));
-            inner.entity_certificates.insert(authority.into(), acceptor);
+            inner.entity_certificates.insert(host.into(), acceptor);
         }
 
-        Ok(inner.entity_certificates.get(authority).cloned().unwrap())
+        Ok(inner.entity_certificates.get(host).cloned().unwrap())
     }
 }

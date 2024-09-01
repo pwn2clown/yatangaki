@@ -242,15 +242,19 @@ impl SettingsTabs {
             SettingsMessage::StartBrowser(port) => {
                 return Task::perform(
                     async move {
+                        //  --ignore-certificate-errors-spki-list
                         let mut child = tokio::process::Command::new("chromium-browser")
-                            .arg(&format!("--proxy-server=localhost:{port}"))
+                            .args(&[
+                                &format!("--proxy-server=localhost:{port}"),
+                                "--disable-dinosaur-easter-egg",
+                            ])
                             .spawn()
                             .expect("skill issue");
 
-                        let _ = child.wait().await.unwrap();
+                        let _ = child.wait().await;
                     },
                     |_| SettingsMessage::Update,
-                )
+                );
             }
             SettingsMessage::Update => {}
         }

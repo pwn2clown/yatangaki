@@ -25,6 +25,3 @@ debug = 0
 strip = true
 codegen-backend = "cranelift"
 overflow-checks = false
-
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["-Zlinker-features=-lld"]

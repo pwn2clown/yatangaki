@@ -37,8 +37,15 @@ struct App {
 
 impl Default for App {
     fn default() -> Self {
-        //  Certificate store should be loaded afterwards in order to display potential errors
-        let certificate_store = CertificateStore::generate().unwrap();
+        let certificate_store = match CertificateStore::load_certificate() {
+            Ok(store) => store,
+            Err(e) => {
+                eprintln!("failed to load certificate: {e}");
+                let store = CertificateStore::generate().unwrap();
+                let _ = store.save_certificate();
+                store
+            }
+        };
 
         Self {
             state: AppState::Menu,
