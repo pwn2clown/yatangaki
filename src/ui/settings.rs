@@ -13,7 +13,7 @@ use iced::{
     widget::text_input,
 };
 use iced::{Element, Length, Subscription, Task};
-use std::collections::HashMap;
+use std::{collections::HashMap, process::Stdio};
 
 pub struct Proxy {
     auto_start: bool,
@@ -39,7 +39,6 @@ pub enum SettingsMessage {
     StartProxy(ProxyId),
     StopProxy(ProxyId),
     ProxyEvent(ProxyEvent),
-    StartBrowser(u16),
     Update,
 }
 
@@ -142,10 +141,6 @@ impl SettingsTabs {
                     _ => button("start").on_press(SettingsMessage::StartProxy(id)),
                 });
 
-                proxy_settings = proxy_settings.push(
-                    button("Start browser").on_press(SettingsMessage::StartBrowser(proxy.port)),
-                );
-
                 if proxy.status == ProxyState::Error {
                     config = config.push(text("an error occured"));
                 }
@@ -239,23 +234,6 @@ impl SettingsTabs {
                 }
                 _ => {}
             },
-            SettingsMessage::StartBrowser(port) => {
-                return Task::perform(
-                    async move {
-                        //  --ignore-certificate-errors-spki-list
-                        let mut child = tokio::process::Command::new("chromium-browser")
-                            .args(&[
-                                &format!("--proxy-server=localhost:{port}"),
-                                "--disable-dinosaur-easter-egg",
-                            ])
-                            .spawn()
-                            .expect("skill issue");
-
-                        let _ = child.wait().await;
-                    },
-                    |_| SettingsMessage::Update,
-                );
-            }
             SettingsMessage::Update => {}
         }
 

@@ -1,6 +1,6 @@
 use crate::db::config;
 use crate::Message;
-use iced::widget::{button, column, row, text, vertical_rule, Button, TextInput};
+use iced::widget::{button, column, row, text, vertical_rule, TextInput};
 use iced::{Element, Length, Task};
 use iced_aw::SelectionList;
 

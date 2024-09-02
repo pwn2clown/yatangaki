@@ -144,7 +144,10 @@ impl ProxyLogs {
                         }
 
                         raw_request.push('\n');
-                        raw_request.push_str(&String::from_utf8_lossy(&request.request_body));
+                        raw_request.push_str(
+                            &String::from_utf8_lossy(&request.request_body)
+                                .replace(|c: char| !c.is_ascii(), "."),
+                        );
 
                         let _ = self.selected_request_content.insert(raw_request);
                     }
@@ -157,7 +160,10 @@ impl ProxyLogs {
                         }
 
                         raw_response.push('\n');
-                        raw_response.push_str(&String::from_utf8_lossy(&response.body));
+                        raw_response.push_str(
+                            &String::from_utf8_lossy(&response.body)
+                                .replace(|c: char| !c.is_ascii(), "."),
+                        );
 
                         let _ = self.selected_response_content.insert(raw_response);
                     }

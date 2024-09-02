@@ -194,7 +194,7 @@ async fn forward_packet(
 
     let maybe_packet_id = logs::insert_request(&full_req, proxy_id);
 
-    sender.send(ProxyEvent::NewRequestLogRow).await.unwrap();
+    let _ = sender.send(ProxyEvent::NewRequestLogRow).await;
 
     //  Note: Host header MUST be removed as reqwest will set it itself. Keeping it will lead to
     //  protocol errors with HTTP/2.
@@ -221,14 +221,13 @@ async fn forward_packet(
     match maybe_packet_id {
         Ok(packet_id) => {
             let _ = logs::insert_response(&hyper_response, body_bytes, packet_id);
-            //  TODO: handle error
         }
         Err(e) => {
             println!("failed to save request: {e:#?}");
         }
     }
 
-    sender.send(ProxyEvent::NewResponseLogRow).await.unwrap();
+    let _ = sender.send(ProxyEvent::NewResponseLogRow).await;
 
     Ok(hyper_response)
 }
