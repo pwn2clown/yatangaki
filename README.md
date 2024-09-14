@@ -2,7 +2,7 @@
 
 Yatangaki is a MITM proxy for HTTP designed for web security testing.
 
-The purpose of this project is to waste my spare time and sanity by implementing this garbage. Use it at your own risks.
+The only purpose of this project is to waste my spare time by implementing this garbage. Use it at your own risks.
 
 ## Features
 

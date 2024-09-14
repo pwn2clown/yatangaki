@@ -1,5 +1,5 @@
 use crate::db::logs;
-use crate::proxy::ProxyEvent;
+use crate::proxy::types::ProxyEvent;
 use crate::Message;
 use iced::widget::pane_grid::Pane;
 use iced::widget::{
@@ -78,7 +78,7 @@ impl ProxyLogs {
     fn proxy_table_view(&self) -> Element<'_, Message> {
         let mut rows = Column::new();
 
-        for summary in logs::get_packets_summary().unwrap() {
+        for summary in logs::get_row_metadata().unwrap() {
             let mut row_button = button(row!(
                 text(summary.packet_id).width(Length::Fixed(75.0)),
                 text(summary.proxy_id).width(Length::Fixed(75.0)),
@@ -133,39 +133,11 @@ impl ProxyLogs {
                 }
 
                 if self.focused_row != Some(packet_id) {
-                    if let Ok(Some(request)) = logs::get_full_request_row(packet_id) {
-                        let mut raw_request = format!(
-                            "{} {} HTTP/1.1\n",
-                            request.request_summary.method, request.request_summary.path
-                        );
-
-                        for (key, value) in request.request_headers {
-                            raw_request.push_str(&format!("{key}: {value}\n"));
-                        }
-
-                        raw_request.push('\n');
-                        raw_request.push_str(
-                            &String::from_utf8_lossy(&request.request_body)
-                                .replace(|c: char| !c.is_ascii(), "."),
-                        );
-
-                        let _ = self.selected_request_content.insert(raw_request);
-                    }
-
-                    if let Ok(Some(response)) = logs::get_full_response_row(packet_id) {
-                        let mut raw_response = format!("HTTP/1.1 {}\n", response.status_code);
-
-                        for (key, value) in response.headers {
-                            raw_response.push_str(&format!("{key}: {value}\n"));
-                        }
-
-                        raw_response.push('\n');
-                        raw_response.push_str(
-                            &String::from_utf8_lossy(&response.body)
-                                .replace(|c: char| !c.is_ascii(), "."),
-                        );
-
-                        let _ = self.selected_response_content.insert(raw_response);
+                    if let Ok(Some(row)) = logs::get_full_row(packet_id) {
+                        let _ = self.selected_request_content.insert(row.request_as_str());
+                        let _ = self
+                            .selected_response_content
+                            .insert(row.response_as_str().unwrap_or_default());
                     }
 
                     let _ = self.focused_row.insert(packet_id);

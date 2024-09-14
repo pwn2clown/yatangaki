@@ -1,5 +1,4 @@
-use crate::proxy::certificates::CertificateStore;
-use crate::proxy::ProxyEvent;
+use crate::proxy::types::ProxyEvent;
 use iced::{Length, Task};
 use iced_aw::{TabLabel, Tabs};
 use ui::proxy_logs::{ProxyLogMessage, ProxyLogs};
@@ -37,20 +36,10 @@ struct App {
 
 impl Default for App {
     fn default() -> Self {
-        let certificate_store = match CertificateStore::load_certificate() {
-            Ok(store) => store,
-            Err(e) => {
-                eprintln!("failed to load certificate: {e}");
-                let store = CertificateStore::generate().unwrap();
-                let _ = store.save_certificate();
-                store
-            }
-        };
-
         Self {
             state: AppState::Menu,
             selected_tab: TabId::ProxyLogs,
-            settings_tab: SettingsTabs::new(certificate_store),
+            settings_tab: SettingsTabs::new(),
             proxy_logs: ProxyLogs::new(),
             start_menu: StartMenu::new(),
             request_editor: RequestEditor::new(),
@@ -99,7 +88,7 @@ impl App {
             }
             Message::StartMenuEvent(event) => match event {
                 StartMenuMessage::LoadSelectedProject(project_name) => {
-                    if let Err(e) = db::logs::create_project_db(&project_name) {
+                    if let Err(e) = db::logs::select_project_db(&project_name) {
                         println!("failed to create net log db: {e}");
                     }
 

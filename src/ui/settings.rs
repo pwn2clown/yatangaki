@@ -2,10 +2,8 @@ use crate::db::{
     config::{self, ProxyConfig},
     logs,
 };
-use crate::proxy::certificates::CertificateStore;
-use crate::proxy::{
-    self, service::ProxyServiceConfig, ProxyCommand, ProxyEvent, ProxyId, ProxyState,
-};
+use crate::proxy;
+use crate::proxy::types::{ProxyCommand, ProxyEvent, ProxyId, ProxyState};
 use crate::Message;
 use iced::widget::{button, column, row, text, vertical_rule, Column, Scrollable};
 use iced::{
@@ -13,7 +11,7 @@ use iced::{
     widget::text_input,
 };
 use iced::{Element, Length, Subscription, Task};
-use std::{collections::HashMap, process::Stdio};
+use std::collections::HashMap;
 
 pub struct Proxy {
     auto_start: bool,
@@ -21,14 +19,12 @@ pub struct Proxy {
     port: u16,
     status: ProxyState,
     command: Option<mpsc::Sender<ProxyCommand>>,
-    config: ProxyServiceConfig,
 }
 
 pub struct SettingsTabs {
     proxy_port_request: String,
     proxies: HashMap<ProxyId, Proxy>,
     selected_proxy: Option<ProxyId>,
-    certificate_store: CertificateStore,
 }
 
 #[derive(Debug, Clone)]
@@ -43,8 +39,8 @@ pub enum SettingsMessage {
 }
 
 impl SettingsTabs {
-    pub fn new(certificate_store: CertificateStore) -> Self {
-        if let Err(e) = logs::create_project_db("test") {
+    pub fn new() -> Self {
+        if let Err(e) = logs::select_project_db("test") {
             println!("failed to create database {e:#?}");
         }
 
@@ -52,7 +48,6 @@ impl SettingsTabs {
             proxy_port_request: String::default(),
             proxies: HashMap::default(),
             selected_proxy: None,
-            certificate_store,
         };
 
         config::init_config().unwrap();
@@ -72,7 +67,6 @@ impl SettingsTabs {
                 port: proxy_config.port,
                 status: ProxyState::Stopped,
                 command: None,
-                config: ProxyServiceConfig::from(self.certificate_store.clone()),
             },
         );
     }
@@ -166,11 +160,10 @@ impl SettingsTabs {
         for proxy in self.proxies.values() {
             let proxy_id = proxy.id;
             let port = proxy.port;
-            let proxy_service_config = ProxyServiceConfig::from(self.certificate_store.clone());
 
             let stream =
                 iced::stream::channel(100, move |sender: mpsc::Sender<ProxyEvent>| async move {
-                    proxy::service::serve(proxy_id, port, sender, proxy_service_config).await
+                    proxy::service::serve(proxy_id, port, sender).await
                 });
 
             subscriptions.push(Subscription::run_with_id(proxy_id, stream));

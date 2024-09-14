@@ -1,0 +1,43 @@
+#!/bin/bash
+#  https://chromium.googlesource.com/chromium/src/+/master/docs/linux/cert_management.md
+
+heeeelp() {
+    echo "usage: ./yatangacli <options>
+        -p <port> 	starts chromium browser with specified port"
+}
+
+CONFIG_DB_PATH=~/.yatangaki/config.db
+
+while getopts ":p:h" opt; do
+    case ${opt} in
+        h)
+            heeeelp
+	    exit 0
+	    ;;
+	p)
+	    [[ -f $CONFIG_DB_PATH ]] || echo "config db does not exists"
+	    [[ -n $(sqlite3 $CONFIG_DB_PATH "SELECT port FROM proxies WHERE port=${OPTARG}") ]] ||\
+		{
+		    echo "No proxy with such port configured. Available proxies:" &&\
+		    sqlite3 $CONFIG_DB_PATH "SELECT port FROM proxies" &&\
+		    exit 1
+		}
+
+            chromium-browser\
+                --proxy-server=localhost:$OPTARG\
+                --disable-dinosaur-easter-egg &
+            ;;
+	?)
+	    echo "Invalid option : ${OPTARG}"
+	    exit 1
+	    ;;
+    esac
+done
+
+#  Start yatangaki
+cargo r &
+
+#  Import yatangaki's CA
+certutil -d sql:$HOME/.pki/nssdb -L -n yatangaki_ca > /dev/null ||\
+	certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n yatangaki_ca -i $HOME/.yatangaki/ca.pem ||\
+	echo "failed to find certificate authority"

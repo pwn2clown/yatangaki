@@ -1,6 +1,5 @@
-use super::{ProxyCommand, ProxyEvent, ProxyId, ProxyState};
+use super::types::{ProxyCommand, ProxyEvent, ProxyId, ProxyState};
 use crate::db::logs;
-use crate::proxy::certificates::CertificateStore;
 use http::uri::{Authority, Parts, Scheme};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
@@ -9,36 +8,18 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use iced::futures::{channel::mpsc, SinkExt};
+use reqwest::redirect::Policy;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 #[derive(Clone)]
-pub struct ProxyServiceConfig {
-    certificates: CertificateStore,
-}
-
-impl ProxyServiceConfig {
-    pub fn from(store: CertificateStore) -> Self {
-        Self {
-            certificates: store.clone(),
-        }
-    }
-}
-
-#[derive(Clone)]
 struct Service {
     proxy_id: ProxyId,
-    config: ProxyServiceConfig,
 }
 
-pub async fn serve(
-    proxy_id: ProxyId,
-    port: u16,
-    mut sender: mpsc::Sender<ProxyEvent>,
-    config: ProxyServiceConfig,
-) {
+pub async fn serve(proxy_id: ProxyId, port: u16, mut sender: mpsc::Sender<ProxyEvent>) {
     let mut state = ProxyState::Stopped;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let mut maybe_shutdown: Option<oneshot::Sender<()>> = None;
@@ -65,10 +46,7 @@ pub async fn serve(
                                 let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
                                 let _ = maybe_shutdown.insert(shutdown_tx);
                                 state = ProxyState::Running;
-                                let s = Service {
-                                    proxy_id,
-                                    config: config.clone(),
-                                };
+                                let s = Service { proxy_id };
                                 tokio::spawn(service(shutdown_rx, sender.clone(), s, l));
                             }
                             Err(_err) => {
@@ -115,7 +93,7 @@ async fn service(
 async fn proxify_request(
     mut req: Request<hyper::body::Incoming>,
     sender: mpsc::Sender<ProxyEvent>,
-    mut service: Service,
+    service: Service,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     if req.uri().scheme_str() == Some("https") {
         let mut res = Response::default();
@@ -138,26 +116,29 @@ async fn proxify_request(
         tokio::spawn(async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(to_upgrade) => {
-                    let acceptor = service.config.certificates.tls_acceptor(&host).unwrap();
+                    let stream = super::tls::TLS_HANDLER
+                        .upgrade_tls(&host, to_upgrade)
+                        .await
+                        .unwrap();
 
-                    //  Acceptor will generate an error if the client rejects the certificate
-                    if let Ok(stream) = acceptor.accept(TokioIo::new(to_upgrade)).await {
-                        let _ = http1::Builder::new()
-                            .serve_connection(
-                                TokioIo::new(stream),
-                                service_fn(move |req| {
-                                    forward_packet(
-                                        req,
-                                        sender.clone(),
-                                        Scheme::HTTPS,
-                                        authority.clone(),
-                                        service.proxy_id,
-                                    )
-                                }),
-                            )
-                            .with_upgrades()
-                            .await;
-                    };
+                    if let Err(e) = http1::Builder::new()
+                        .serve_connection(
+                            TokioIo::new(stream),
+                            service_fn(move |req| {
+                                forward_packet(
+                                    req,
+                                    sender.clone(),
+                                    Scheme::HTTPS,
+                                    authority.clone(),
+                                    service.proxy_id,
+                                )
+                            }),
+                        )
+                        .with_upgrades()
+                        .await
+                    {
+                        eprintln!("{e}");
+                    }
                 }
                 Err(_err) => {
                     println!("failed to upgrade protocol");
@@ -184,50 +165,53 @@ async fn forward_packet(
     uri_parts.scheme = Some(scheme);
     uri_parts.authority = Some(authority);
 
-    let full_uri = Uri::from_parts(uri_parts).unwrap();
+    let (mut parts, body_stream) = req.into_parts();
+    parts.uri = Uri::from_parts(uri_parts).unwrap();
 
-    //  Build reqwest compatible request
-    let (parts, body_stream) = req.into_parts();
     let full_body = body_stream.collect().await.unwrap().to_bytes();
+    let (logs_request_parts, logs_request_body) = (parts.clone(), full_body.clone());
     let mut full_req = http::request::Request::from_parts(parts, full_body);
-    *full_req.uri_mut() = full_uri;
-
-    let maybe_packet_id = logs::insert_request(&full_req, proxy_id);
-
-    let _ = sender.send(ProxyEvent::NewRequestLogRow).await;
 
     //  Note: Host header MUST be removed as reqwest will set it itself. Keeping it will lead to
     //  protocol errors with HTTP/2.
     full_req.headers_mut().remove(http::header::HOST);
     let reqwest_req = reqwest::Request::try_from(full_req).unwrap();
 
-    let http_client = reqwest::Client::new();
-    let Ok(response) = http_client.execute(reqwest_req).await else {
-        let mut res = Response::default();
-        *res.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-        return Ok(res);
-    };
+    let http_client = reqwest::Client::builder()
+        .redirect(Policy::none())
+        .gzip(true)
+        .build()
+        .unwrap();
 
-    let mut hyper_response = Response::default();
+    Ok(match http_client.execute(reqwest_req).await {
+        Ok(response) => {
+            let mut res = Response::default();
+            *res.status_mut() = response.status();
+            *res.headers_mut() = response.headers().clone();
+            *res.version_mut() = response.version();
+            *res.extensions_mut() = response.extensions().clone();
 
-    *hyper_response.status_mut() = response.status();
-    *hyper_response.headers_mut() = response.headers().clone();
-    *hyper_response.version_mut() = response.version();
-    *hyper_response.extensions_mut() = response.extensions().clone();
+            let body_bytes = response.bytes().await.unwrap();
+            let logs_response_body = body_bytes.clone();
 
-    let body_bytes = response.bytes().await.unwrap();
-    *hyper_response.body_mut() = Full::new(body_bytes.clone());
+            let _ = logs::insert_http_row(
+                proxy_id,
+                logs_request_body,
+                logs_request_parts,
+                Some((res.clone(), logs_response_body)),
+            );
+            let _ = sender.send(ProxyEvent::NewHttpLogRow).await;
 
-    match maybe_packet_id {
-        Ok(packet_id) => {
-            let _ = logs::insert_response(&hyper_response, body_bytes, packet_id);
+            *res.body_mut() = Full::new(body_bytes);
+            res
         }
-        Err(e) => {
-            println!("failed to save request: {e:#?}");
+        Err(_e) => {
+            let _ = logs::insert_http_row(proxy_id, logs_request_body, logs_request_parts, None);
+            let _ = sender.send(ProxyEvent::NewHttpLogRow).await;
+
+            let mut res = Response::default();
+            *res.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+            res
         }
-    }
-
-    let _ = sender.send(ProxyEvent::NewResponseLogRow).await;
-
-    Ok(hyper_response)
+    })
 }
