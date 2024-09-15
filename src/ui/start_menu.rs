@@ -10,28 +10,21 @@ pub enum StartMenuMessage {
     CreateProject(String),
     UpdateProjectName(String),
     LoadSelectedProject(String),
-    DeleteProject(String, usize),
+    DeleteProject(String),
 }
 
 pub struct StartMenu {
     selected_project_index: Option<usize>,
     input_project_name: String,
     projects: Vec<String>,
-    err: Option<String>,
 }
 
 impl StartMenu {
     pub fn new() -> Self {
-        let (projects, err) = match config::project_list() {
-            Ok(projects) => (projects, None),
-            Err(e) => (vec![], Some(e.to_string())),
-        };
-
         Self {
             selected_project_index: None,
             input_project_name: String::default(),
-            projects,
-            err,
+            projects: config::project_list().unwrap_or_default(),
         }
     }
 
@@ -58,17 +51,20 @@ impl StartMenu {
     fn selected_project_menu(&self) -> Element<'_, StartMenuMessage> {
         match self.selected_project_index {
             Some(index) => {
+                let button_width = Length::Fixed(150.0);
                 let selected_project_name = self.projects.get(index).unwrap();
 
                 column!(
-                    button("Load").on_press(StartMenuMessage::LoadSelectedProject(
-                        selected_project_name.clone()
-                    )),
+                    button("Load")
+                        .on_press(StartMenuMessage::LoadSelectedProject(
+                            selected_project_name.clone()
+                        ))
+                        .width(button_width),
                     button("Delete")
                         .on_press(StartMenuMessage::DeleteProject(
-                            selected_project_name.clone(),
-                            index,
+                            selected_project_name.clone()
                         ))
+                        .width(button_width)
                         .style(button::danger)
                 )
                 .into()
@@ -106,12 +102,12 @@ impl StartMenu {
             StartMenuMessage::UpdateProjectName(project_name) => {
                 self.input_project_name = project_name;
             }
-            StartMenuMessage::DeleteProject(name, index) => {
+            StartMenuMessage::DeleteProject(name) => {
                 if let Err(e) = config::delete_project(&name) {
                     println!("failed to delete project: {e}");
-                    self.projects.remove(index);
-                    self.selected_project_index = None;
                 }
+                self.projects = config::project_list().unwrap_or_default();
+                self.selected_project_index = None;
             }
             StartMenuMessage::LoadSelectedProject(_project_name) => {}
         }

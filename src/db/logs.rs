@@ -91,6 +91,7 @@ pub fn insert_http_row(
     let packet_id: usize = {
         let mut stmt = conn.prepare_cached("SELECT MAX(packet_id) + 1 FROM requests")?;
 
+        #[allow(clippy::let_and_return)]
         let packet_id = match stmt.query(())?.next()? {
             Some(row) => row.get(0).unwrap_or(0),
             None => 0,

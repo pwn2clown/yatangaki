@@ -24,6 +24,7 @@ pub enum ProxyLogMessage {
     ProxyEvent(ProxyEvent),
     SelectPacket(PacketId),
     UpdateQuery(String),
+    NewProjectLoaded,
 }
 
 enum Panes {
@@ -145,6 +146,14 @@ impl ProxyLogs {
             }
             ProxyLogMessage::UpdateQuery(query) => {
                 self.raw_search_query = query;
+            }
+            ProxyLogMessage::NewProjectLoaded => {
+                let (panes, pane) = pane_grid::State::new(Panes::Logs);
+                self.selected_request_content = None;
+                self.selected_response_content = None;
+                self.focused_row = None;
+                self.panes = panes;
+                self.main_pane = pane;
             }
         }
         Task::none()

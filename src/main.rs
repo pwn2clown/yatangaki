@@ -1,5 +1,6 @@
 use crate::proxy::types::ProxyEvent;
-use iced::{Length, Task};
+use iced::widget::text;
+use iced::{window, Length, Task};
 use iced_aw::{TabLabel, Tabs};
 use ui::proxy_logs::{ProxyLogMessage, ProxyLogs};
 use ui::request_editor::{EditorMessage, RequestEditor};
@@ -11,6 +12,7 @@ mod proxy;
 mod ui;
 
 enum AppState {
+    Loading,
     Menu,
     ProjectLoaded(String),
 }
@@ -37,7 +39,7 @@ struct App {
 impl Default for App {
     fn default() -> Self {
         Self {
-            state: AppState::Menu,
+            state: AppState::Loading,
             selected_tab: TabId::ProxyLogs,
             settings_tab: SettingsTabs::new(),
             proxy_logs: ProxyLogs::new(),
@@ -57,22 +59,24 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        if let AppState::Loading = self.state {
+            self.state = AppState::Menu;
+            return window::get_latest().and_then(move |window| window::maximize(window, true));
+        }
+
         match message {
             Message::TabSelected(tab_id) => {
                 self.selected_tab = tab_id;
+                Task::none()
             }
-            Message::SettingsMessage(message) => {
-                return self
-                    .settings_tab
-                    .update(message)
-                    .map(Message::SettingsMessage)
-            }
-            Message::ProxyLogMessage(message) => {
-                return self
-                    .proxy_logs
-                    .update(message)
-                    .map(Message::ProxyLogMessage);
-            }
+            Message::SettingsMessage(message) => self
+                .settings_tab
+                .update(message)
+                .map(Message::SettingsMessage),
+            Message::ProxyLogMessage(message) => self
+                .proxy_logs
+                .update(message)
+                .map(Message::ProxyLogMessage),
             Message::ProxyEvent(event) => {
                 //  TODO: should make fine grained update dispatch to avoid useless clones and
                 //  update calls
@@ -93,18 +97,18 @@ impl App {
                     }
 
                     self.state = AppState::ProjectLoaded(project_name);
+                    //  A message is sent to proxy logs to reset selected request on project change
+                    self.proxy_logs
+                        .update(ProxyLogMessage::NewProjectLoaded)
+                        .map(Message::ProxyLogMessage)
                 }
-                _ => return self.start_menu.update(event).map(Message::StartMenuEvent),
+                _ => self.start_menu.update(event).map(Message::StartMenuEvent),
             },
-            Message::RequestEditor(event) => {
-                return self
-                    .request_editor
-                    .update(event)
-                    .map(Message::RequestEditor);
-            }
+            Message::RequestEditor(event) => self
+                .request_editor
+                .update(event)
+                .map(Message::RequestEditor),
         }
-
-        Task::none()
     }
 
     fn subscription(&self) -> iced::Subscription<Message> {
@@ -113,6 +117,7 @@ impl App {
 
     fn view(&self) -> iced::Element<'_, Message> {
         match &self.state {
+            AppState::Loading => text("Loading...").into(),
             AppState::Menu => self.start_menu.view(),
             AppState::ProjectLoaded(_project_name) => Tabs::new(Message::TabSelected)
                 .text_size(12.0)

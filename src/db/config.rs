@@ -4,9 +4,10 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 
-const CONFIG_DB: LazyLock<Connection> = LazyLock::new(|| init_db_conn().unwrap());
+static CONFIG_DB: LazyLock<Mutex<Connection>> =
+    LazyLock::new(|| Mutex::new(init_db_conn().unwrap()));
 
 pub struct ProxyConfig {
     pub port: u16,
@@ -30,15 +31,17 @@ fn init_db_conn() -> Result<Connection, Box<dyn Error>> {
 }
 
 pub fn init_config() -> Result<(), Box<dyn Error>> {
-    CONFIG_DB.execute_batch(&fs::read_to_string("./schema/config.sql")?)?;
-
+    CONFIG_DB
+        .lock()
+        .unwrap()
+        .execute_batch(&fs::read_to_string("./schema/config.sql")?)?;
     Ok(())
 }
 
 pub fn project_list() -> Result<Vec<String>, Box<dyn Error>> {
     let mut project_names = vec![];
-    let binding = CONFIG_DB;
-    let mut stmt = binding.prepare("SELECT name FROM projects")?;
+    let conn = CONFIG_DB.lock().unwrap();
+    let mut stmt = conn.prepare_cached("SELECT name FROM projects")?;
     let mut rows = stmt.query([])?;
 
     while let Some(row) = rows.next()? {
@@ -49,20 +52,26 @@ pub fn project_list() -> Result<Vec<String>, Box<dyn Error>> {
 }
 
 pub fn create_project(name: &str) -> Result<(), Box<dyn Error>> {
-    CONFIG_DB.execute("INSERT INTO projects (name) VALUES(?1)", [name])?;
+    CONFIG_DB
+        .lock()
+        .unwrap()
+        .execute("INSERT INTO projects (name) VALUES(?1)", [name])?;
     Ok(())
 }
 
 pub fn delete_project(name: &str) -> Result<(), Box<dyn Error>> {
-    CONFIG_DB.execute("DELETE FROM projects WHERE name = ?1", [name])?;
+    CONFIG_DB
+        .lock()
+        .unwrap()
+        .execute("DELETE FROM projects WHERE name = ?1", [name])?;
     fs::remove_dir_all(format!("{}/{}/{name}", env!("HOME"), super::CONFIG_DIR))?;
     Ok(())
 }
 
 pub fn load_proxies() -> Result<Vec<ProxyConfig>, Box<dyn Error>> {
-    let binding = CONFIG_DB;
+    let conn = CONFIG_DB.lock().unwrap();
     let mut proxies = vec![];
-    let mut stmt = binding.prepare("SELECT proxy_id, port, auto_start FROM proxies")?;
+    let mut stmt = conn.prepare("SELECT proxy_id, port, auto_start FROM proxies")?;
     let mut rows = stmt.query([])?;
 
     while let Some(row) = rows.next()? {
@@ -77,9 +86,9 @@ pub fn load_proxies() -> Result<Vec<ProxyConfig>, Box<dyn Error>> {
 }
 
 pub fn save_proxy(proxy: &ProxyConfig) -> Result<(), Box<dyn Error>> {
-    let binding = CONFIG_DB;
+    let conn = CONFIG_DB.lock().unwrap();
     let mut stmt =
-        binding.prepare("INSERT INTO proxies (proxy_id, port, auto_start) VALUES (?1, ?2, ?3)")?;
+        conn.prepare("INSERT INTO proxies (proxy_id, port, auto_start) VALUES (?1, ?2, ?3)")?;
 
     stmt.execute((
         proxy.id,
