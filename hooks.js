@@ -1,6 +1,23 @@
 (function() {
-    const PREFIX = 'soDOMx-src';
+    const PREFIX = '__domscan';
+    const CANARY = window.__CANARY;
 
+    function logEvent(
+        detection_type,
+        name,
+        value,
+        result,
+    ) {
+        window.__inspector_callback({
+            detection_type: detection_type,
+            stack: new Error().stack.split('\n').slice(2).join('\n').trim(),
+            name: name,
+            value: value,
+            result: result
+        });
+    }
+    
+    // ---- Sources hooking
     // location.* & document.URL -> property not configurable)
     const sources = [
         { name: 'Storage.getItem', obj: Storage.prototype, prop: 'getItem' },
@@ -31,7 +48,7 @@
                     ...descriptor,
                     get: function () {
                         const value = descriptor.get.call(this);
-                        console.log(`${PREFIX} → ${name} = ${JSON.stringify(value)}`);
+                        logEvent("source.get", `${obj}`, `${prop}`, value);
                         return value;
                     }
                 });
@@ -42,7 +59,7 @@
                     value: function (...args) {
                         const result = original.apply(this, args);
                         const argStr = args.map(a => JSON.stringify(a)).join(', ');
-                        console.log(`${PREFIX} → ${name}(${argStr}) = ${JSON.stringify(result)}`);
+                        logEvent("source.call", `${name}`, `${argStr}`, result);
                         return result;
                     }
                 });
@@ -53,4 +70,52 @@
     }
 
     sources.forEach(hookSource);
+
+    // ---- sink hooking
+    const sinks = [
+        //  Vanilla JS
+        { name: 'innerHTML',          target: Element.prototype,   prop: 'innerHTML'          },
+        { name: 'outerHTML',          target: Element.prototype,   prop: 'outerHTML'          },
+        { name: 'insertAdjacentHTML', target: Element.prototype,   prop: 'insertAdjacentHTML' },
+        { name: 'document.write',     target: Document.prototype,  prop: 'write'              },
+        // eval runs "forever" for some reason...
+        //{ name: 'eval',               target: window,              prop: 'eval'               },
+        { name: 'setTimeout',         target: window,              prop: 'setTimeout'         },
+        { name: 'setInterval',        target: window,              prop: 'setInterval'        },
+        { name: 'Function',           target: window,              prop: 'Function'           },
+        //  React
+        { name: 'dangerouslySetInnerHTML', special: true }
+    ];
+    
+    sinks.forEach(sink => {
+        if (sink.special) return; // handled separately
+
+        const descriptor = Object.getOwnPropertyDescriptor(sink.target, sink.prop);
+        if (!descriptor || descriptor.configurable === false) return;
+
+        try {
+            if (descriptor.set) {
+                Object.defineProperty(sink.target, sink.prop, {
+                    ...descriptor,
+                    set(value) {
+                        logEvent('sink.set', sink.name, value, "");
+                        return descriptor.set.call(this, value);
+                    }
+                });
+            } else if (typeof descriptor.value === 'function') {
+                const original = descriptor.value;
+                Object.defineProperty(sink.target, sink.prop, {
+                    ...descriptor,
+                    value(...args) {
+                        if (typeof args[0] === 'string') {
+                            logEvent('sink.call', sink.name, args[0], "");
+                        }
+                        return original.apply(this, args);
+                    }
+                });
+            }
+        } catch (e) {
+            console.warn(`${PREFIX} → skip sink ${sink.name}: ${e.message}`);
+        }
+    });
 })();
