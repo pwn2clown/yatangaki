@@ -1,2 +1,4 @@
 google.com
 bing.com
+googleapis.com
+google-analytics.com

@@ -20,9 +20,9 @@
     // ---- Sources hooking
     // location.* & document.URL -> property not configurable)
     const sources = [
-        { name: 'Storage.getItem', obj: Storage.prototype, prop: 'getItem' },
-        { name: 'Storage.setItem', obj: Storage.prototype, prop: 'setItem' },
-        { name: 'Storage.removeItem', obj: Storage.prototype, prop: 'removeItem' },
+        //{ name: 'Storage.getItem', obj: Storage.prototype, prop: 'getItem' },
+        //{ name: 'Storage.setItem', obj: Storage.prototype, prop: 'setItem' },
+        //{ name: 'Storage.removeItem', obj: Storage.prototype, prop: 'removeItem' },
 
         { name: 'URLSearchParams.get',    obj: URLSearchParams.prototype, prop: 'get'    },
         { name: 'URLSearchParams.getAll', obj: URLSearchParams.prototype, prop: 'getAll' },
@@ -48,7 +48,7 @@
                     ...descriptor,
                     get: function () {
                         const value = descriptor.get.call(this);
-                        logEvent("source.get", `${obj}`, `${prop}`, value);
+                        logEvent("source.get", `${obj}`, prop.toString(), value);
                         return value;
                     }
                 });
@@ -70,6 +70,16 @@
     }
 
     sources.forEach(hookSource);
+    
+    const originalSplit = String.prototype.split;
+    String.prototype.split = function(separator, limit) {
+        const result = originalSplit.apply(this, arguments);
+        if (separator === "=" && result.length === 2) {
+            const thisStr = String(this);
+            logEvent('source.manual-url-parse', `String.split('${separator}')`, thisStr, result[1]);
+        }
+        return result;
+    };
 
     // ---- sink hooking
     const sinks = [

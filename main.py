@@ -1,5 +1,5 @@
 import asyncio
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse, urlencode, parse_qs, urlunparse
 from playwright.async_api import async_playwright, Playwright
 
 class Color:
@@ -36,16 +36,45 @@ async def run(playwright: Playwright):
         res = data["result"]
 
         log = f"[+] client event [{detection_type}]: {name}, args = {value}";
-        if res:
-            log += f", res = {data['result']}"
+        if res is not None:
+            log += f", res = {res}"
         
-        color = Color.RED
-        if "sink" in detection_type:
-            color = Color.WARNING
+        color = Color.RED if "sink" in detection_type else Color.WARNING
+        if "sink." in detection_type and not CANARY in value:
+            return
         printc(color, log)
 
         if detection_type == "source.call" and name.split(".")[0] == "URLSearchParams":
-            url_params.add(value)
+            url_params.add(value[1:-1])
+        elif detection_type == "source.manual-url-parse":
+            url_params.add(res)
+
+    async def handle_response(response):
+        try:
+            body = await response.body()
+            body = body.decode()
+            url = urlparse(response.url)
+        except:
+            #  If utf-8 decoding fails, we don't care about this resource
+            return
+
+        if "javascript" in (response.headers.get("content-type") or "").lower() and response.status == 200:
+            if matches_wl(url.netloc, EXCLUDED_SCRIPT_DOMAINS) or \
+                matches_wl(url.path, KNOWN_LIBS):
+                print(f"[+] excluded file {response.url[:150]} (known lib)")
+                return
+            if body:
+                printc(Color.OKBLUE, f"[+] JS captured : {response.url} → ({len(body):,} bytes)")
+
+        elif url.netloc == target_domain:
+            print(f"[+] other resource loaded {response.url}")
+            query_string = parse_qs(url.query)
+            for fetched_url_param in query_string.keys():
+                print(f"[+] found query param {fetched_url_param}")
+                url_params.add(fetched_url_param)
+
+            if CANARY in body:
+                print(f"[+] canary reflected in response ({response.url})")
 
     page = await ctx.new_page()
     await page.expose_function("__inspector_callback", js_callback_hook)
@@ -53,28 +82,42 @@ async def run(playwright: Playwright):
     page.on("console", handle_console)
     
     #  iter targets
-    await page.goto(f"https://REDACTED/?hook={CANARY}#{CANARY}")
+    base_url= f"https://REDACTED"
+    target_url = f"{base_url}?id={CANARY}#{CANARY}"
+    target_domain = urlparse(target_url).netloc
+    await page.goto(target_url)
     await page.wait_for_timeout(5000)
 
-    print(f"found used url params: {url_params}")
+    # reload with discovered params if any
+    if url_params:
+        print("-" * 100)
+        print(f"[+] found used url params: {url_params}, reloading page.")
+
+        query_dict = {p: CANARY for p in url_params}
+        query_dict["hook"] = CANARY
+
+        new_query = urlencode(query_dict, doseq=True)
+        new_url = urlunparse((
+            urlparse(base_url).scheme,
+            urlparse(base_url).netloc,
+            urlparse(base_url).path,
+            "",
+            new_query,
+            f"{CANARY}"
+        ))
+        
+        print(f"{new_url}")
+
+        await page.goto(new_url)
+        await page.wait_for_timeout(5000)
+    else:
+        print("[-] no discovered parameters, exiting...")
+
+    print(f"[+] Analysis finished, found {len(url_params)} URL parameters")
+    for p in url_params:
+        print(f" - {p}")
+
     await browser.close()
-
-async def handle_response(response):
-    if "javascript" in (response.headers.get("content-type") or "").lower() and \
-        response.status == 200:
-
-        url = urlparse(response.url)
-        if matches_wl(url.netloc, EXCLUDED_SCRIPT_DOMAINS) or \
-            matches_wl(url.path, KNOWN_LIBS):
-            print(f"[+] excluded file {response.url[:150]} (known lib)")
-            return
-
-        try:
-            body = await response.body()
-            if body:
-                print(f"[+] JS captured : {response.url} → ({len(body):,} bytes)")
-        except:
-            pass
 
 async def handle_console(msg):
     text = msg.text
